@@ -25,6 +25,7 @@ ITEMS: list[tuple[str, list[tuple[str, list[str]]]]] = [
         # that only printed a command's --help, made the menu feel broken.
         ("Find a GPU to rent", ["specs"]),
         ("Manage my jobs", ["jobs"]),
+        ("Set up SSH access to my VMs", ["ssh"]),
         ("My wallet", ["wallet"]),
     ]),
     ("SELL", [

@@ -877,6 +877,30 @@ def cmd_agent(a, cfg):
     return _ac.cmd_status(_ui.out, cfg, _client, json_mode=JSON)
 
 
+def cmd_ssh(a, cfg):
+    """`petabyte ssh` — set this computer up to reach your VMs, and connect to one."""
+    _require_product()
+    from petabyte_cli import ssh_cmds as _ssh
+    if getattr(a, "status", False):
+        return _ssh.cmd_status(_ui.out, cfg, _client, json_mode=JSON)
+    vm = getattr(a, "vm", None)
+    if getattr(a, "print_only", False):
+        return _ssh.connect(_ui.out, cfg, vm, user=a.user, print_only=True, client_factory=_client)
+    # An already-set-up machine connecting to a named VM should just connect — the wizard is for
+    # the first run (or when something is missing).
+    if vm and not getattr(a, "setup", False):
+        st = _ssh.S.detect(cfg)
+        if st.configured and st.chosen:
+            return _ssh.connect(_ui.out, cfg, vm, user=a.user, client_factory=_client)
+    return _ssh.cmd_setup(_ui.out, cfg, _client, login=lambda: _login_web(cfg),
+                          yes=bool(getattr(a, "yes", False)),
+                          new_key=bool(getattr(a, "new_key", False)),
+                          use_key=getattr(a, "key", None),
+                          passphrase=bool(getattr(a, "passphrase", False)),
+                          dry_run=bool(getattr(a, "dry_run", False)),
+                          user=a.user, connect_vm=vm)
+
+
 def _startup(a):
     """Python-version and update checks: quiet, cached, never blocking, never fatal."""
     global _UPDATE
@@ -1021,6 +1045,19 @@ def _build_parser():
     al = ags.add_parser("logs", help="follow the agent log")
     al.add_argument("-n", "--lines", type=int, default=30)
 
+    sh = sub.add_parser("ssh", help="set this computer up to reach your VMs (and connect to one)")
+    sh.add_argument("vm", nargs="?", help="VM id to connect to (default: set up only)")
+    sh.add_argument("--status", action="store_true", help="show what is configured on this machine")
+    sh.add_argument("--setup", action="store_true", help="run the setup wizard even if already configured")
+    sh.add_argument("--key", help="use this SSH public key (path to a .pub file)")
+    sh.add_argument("--new-key", dest="new_key", action="store_true",
+                    help="create a new key just for Petabyte instead of reusing one")
+    sh.add_argument("--passphrase", action="store_true", help="ask for a passphrase when creating a key")
+    sh.add_argument("--user", default="root", help="login user on the VM (default: root)")
+    sh.add_argument("--print", dest="print_only", action="store_true", help="print the ssh command, don't run it")
+    sh.add_argument("--dry-run", dest="dry_run", action="store_true", default=_S)
+    sh.add_argument("-y", "--yes", action="store_true", default=_S)
+
     # model hub: discover/pull/manage AI models (Hugging Face-grade UX). Owns `model`, `pull`, `auth`;
     # `run` is shared with the compute flow above and dispatched smartly below.
     if mh_cli is not None:
@@ -1032,7 +1069,7 @@ COMMANDS = {"deposit": cmd_deposit, "login": cmd_login, "wallet": cmd_wallet, "s
             "run": cmd_run, "launch": cmd_launch, "vpn": cmd_vpn, "earnings": cmd_earnings,
             "node": cmd_node, "ask": cmd_ask, "render": cmd_render, "transcode": cmd_transcode,
             "me": cmd_me, "doctor": cmd_doctor, "jobs": cmd_jobs, "activity": cmd_activity,
-            "version": cmd_version, "agent": cmd_agent}
+            "version": cmd_version, "agent": cmd_agent, "ssh": cmd_ssh}
 
 
 def _dispatch(a, cfg, p):

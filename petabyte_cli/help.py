@@ -39,6 +39,7 @@ GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         ("launch <template>", "one-click app (ollama, jupyter, blender…) on the cheapest GPU"),
         ("run <file>", "run a notebook / .py on a rented GPU and print the result"),
         ("jobs", "your running instances and recent bookings"),
+        ("ssh [vm]", "set this computer up to reach your VMs, then connect"),
         ("ask \"<prompt>\"", "pay-per-token inference (OpenAI-compatible)"),
         ("render / transcode", "Blender frames / GPU video transcode"),
         ("vpn <booking>", "WireGuard config for a VPN booking"),
@@ -63,6 +64,7 @@ EXAMPLES: list[tuple[str, str]] = [
     ("Start earning", "petabyte --run-agent"),
     ("Stop the seller agent", "petabyte --kill-agent"),
     ("Rent the cheapest GPU for a notebook", "petabyte run train.ipynb --gpu \"RTX 4090\" --hours 2"),
+    ("Get SSH access to your VMs", "petabyte ssh"),
     ("Something's wrong?", "petabyte doctor"),
 ]
 

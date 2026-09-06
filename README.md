@@ -52,6 +52,8 @@ petabyte specs                                        # GPUs you can rent right 
 petabyte launch ollama --hours 2                      # one-click app on the cheapest verified GPU
 petabyte run train.ipynb --gpu "RTX 4090" --hours 1   # run a notebook / .py on a rented GPU
 petabyte jobs                                         # what's running, recent bookings
+petabyte ssh                                          # one-time: make this computer able to reach your VMs
+petabyte ssh <vm-id>                                  # then connect
 petabyte ask "explain attention" --model llama3.2     # pay-per-token inference (OpenAI-compatible)
 ```
 
@@ -69,6 +71,7 @@ petabyte ask "explain attention" --model llama3.2     # pay-per-token inference 
 | | `agent status\|logs\|install\|start\|stop` | the same as subcommands |
 | | `earnings` · `node status <id>` · `node sync-models <id>` | payouts · one node in detail · report cached models |
 | **Buyer** | `specs` · `launch <template>` · `run <file>` · `jobs` | rent and run |
+| | `ssh [vm-id]` | set this computer up to reach your VMs, then connect (`--status`, `--print`, `--key`, `--new-key`) |
 | | `ask "<prompt>"` · `render` · `transcode` · `vpn <booking>` | inference · Blender · NVENC · WireGuard config |
 | **Models** | `model search\|info\|pull\|list\|inspect\|remove` · `pull <id>` · `run <model-id>` | local model hub (no account needed) |
 | **System** | `--version` · `--json` · `--verbose` · `--api <url>` · `-y/--yes` | version & update status · machine-readable output · full error detail · another host · assume yes |
