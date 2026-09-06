@@ -1,33 +1,49 @@
 #!/usr/bin/env python3
-"""Petabyte CLI — book GPU compute and run a notebook in one command.
+"""Petabyte CLI — rent verified GPUs, or earn by selling yours.
 
-Authentication: export an account API key — sign in on the web (Google), create an
-'account'-scoped key, then `export PETABYTE_API_KEY=pk_…`. The CLI sends it on every
-request; there is no password login.
+  petabyte login              sign in with your browser (no password on the CLI)
+  petabyte --me               your dashboard: account, wallet, what's running, agent, system
+  petabyte --install-agent    guided seller setup       petabyte --run-agent / --kill-agent
+  petabyte specs              rentable GPUs             petabyte launch ollama --hours 2
+  petabyte run notebook.ipynb --gpu H100 --hours 1      petabyte doctor
 
-  export PETABYTE_API_KEY=pk_...
-  petabyte deposit 100
-  petabyte specs
-  petabyte launch ollama --hours 2
-  petabyte run notebook.ipynb --gpu H100 --hours 1
-  petabyte wallet
+Authentication: `petabyte login` (browser device flow) saves a session token in
+~/.petabyte/cli.json (0600); or export an 'account'-scoped API key as PETABYTE_API_KEY.
+The product layer (rich UI, dashboard, agent wizard, doctor, version check) lives in the
+sibling `petabyte_cli` package; the classic commands below work without it.
 """
 import argparse
 import json
 import os
+import os as _os
 import sys
 import time
 
 import httpx
-import os as _os
 
 # The model hub (discover/pull/manage models) lives in the sibling `modelhub` package. Make it
 # importable whether the CLI is run as `python cli/petabyte.py` or installed as `petabyte`.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
     from modelhub import cli as mh_cli
-except Exception:  # noqa: BLE001 — model commands are optional; the compute CLI still works without
+except Exception:
     mh_cli = None
+
+# The product layer (dashboard, agent wizard, doctor, rich UI). Importable both from a source
+# checkout (lumaris_api/cli/petabyte_cli) and from the wheel (top-level package).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    import petabyte_cli
+    from petabyte_cli import errors as _errors
+    from petabyte_cli import ui as _ui
+    from petabyte_cli import version_check as _vc
+except Exception:
+    petabyte_cli = None
+    _errors = _ui = _vc = None
+
+JSON = False            # --json: machine-readable output where a command supports it
+VERBOSE = False         # --verbose: full technical detail on errors
+_UPDATE = None          # UpdateInfo from the startup check (or None)
 
 _TTY = hasattr(__import__("sys").stdout, "isatty") and __import__("sys").stdout.isatty() and not _os.getenv("NO_COLOR")
 def _c(txt, code):
@@ -47,16 +63,32 @@ DEFAULT_API = os.getenv("PETABYTE_API_URL", "https://petabyte.market")
 
 def _cfg():
     try:
-        return json.load(open(CONFIG))
+        with open(CONFIG, encoding="utf-8") as f:
+            cfg = json.load(f)
     except Exception:
-        return {"api_url": DEFAULT_API}
+        cfg = {}
+    if not isinstance(cfg, dict):
+        cfg = {}
+    # Precedence: --api > $PETABYTE_API_URL > the saved file > production. An explicit environment
+    # variable must win over a file saved months ago, or "point at my dev server" silently fails.
+    if os.getenv("PETABYTE_API_URL"):
+        cfg["api_url"] = os.environ["PETABYTE_API_URL"]
+    cfg.setdefault("api_url", DEFAULT_API)   # a hand-edited file without api_url must not crash
+    return cfg
 
 
 def _save(cfg):
     d = os.path.dirname(CONFIG)
     if d:                                   # a bare filename (e.g. PETABYTE_CONFIG=cli.json) has no dir
         os.makedirs(d, exist_ok=True)
-    json.dump(cfg, open(CONFIG, "w"))
+    # The file holds your sign-in token: create it private (0600) and keep it that way.
+    fd = os.open(CONFIG, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        json.dump(cfg, f)
+    try:
+        os.chmod(CONFIG, 0o600)
+    except OSError:
+        pass
 
 
 def _api_key(cfg):
@@ -88,7 +120,7 @@ def _humanize_error(r):
     present so a report is still traceable."""
     try:
         j = r.json()
-    except Exception:                       # noqa: BLE001 — non-JSON body
+    except Exception:
         return (r.text or "").strip()[:200]
     err = j.get("error") if isinstance(j, dict) else None
     msg = (err or {}).get("message") if isinstance(err, dict) else None
@@ -105,9 +137,30 @@ def _humanize_error(r):
 
 
 def _die(msg, r=None):
-    if r is not None:
-        msg += f" ({r.status_code}: {_humanize_error(r)})"
-    print(f"error: {msg}", file=sys.stderr)
+    """Exit 1 with a human-first error (what happened, the server's own words, what to run)."""
+    if _ui is None:
+        if r is not None:
+            msg += f" ({r.status_code}: {_humanize_error(r)})"
+        print(f"error: {msg}", file=sys.stderr)
+        sys.exit(1)
+    if JSON:
+        _ui.err.raw(json.dumps({"error": msg, "status": getattr(r, "status_code", None),
+                                "detail": _humanize_error(r) if r is not None else None}))
+        sys.exit(1)
+    if r is None:
+        _ui.err.error(msg)
+    elif r.status_code == 401:
+        _ui.err.error(msg, reason="You're not signed in (or the key/token is no longer valid).",
+                      fix="Sign in with your browser, or export a valid PETABYTE_API_KEY.",
+                      run="petabyte login", detail=f"401: {_humanize_error(r)}")
+    elif r.status_code == 402:
+        _ui.err.error(msg, reason=_humanize_error(r), fix="Add funds first:", run="petabyte deposit 20",
+                      detail="402")
+    elif r.status_code >= 500:
+        _ui.err.error(msg, reason="Petabyte had a problem on its side.", fix="Try again in a moment.",
+                      run="petabyte doctor", detail=f"{r.status_code}: {_humanize_error(r)}")
+    else:
+        _ui.err.error(msg, reason=_humanize_error(r), detail=f"HTTP {r.status_code}")
     sys.exit(1)
 
 
@@ -129,8 +182,14 @@ def _login_web(cfg):
         _die("could not start browser login", r)
     d = r.json()
     url = d.get("verification_uri_complete") or d.get("verification_uri")
-    print("Open this URL to authorize the CLI:\n  " + _cyan(url) +
-          "\nand confirm the code: " + _bold(d.get("user_code", "?")))
+    if _ui is not None:
+        _ui.out.brand("Sign in")
+        _ui.out.line("Open this link in your browser to authorize the CLI:")
+        _ui.out.command(url)
+        _ui.out.line("and confirm this code:  " + str(d.get("user_code", "?")))
+    else:
+        print("Open this URL to authorize the CLI:\n  " + _cyan(url) +
+              "\nand confirm the code: " + _bold(d.get("user_code", "?")))
     try:
         webbrowser.open(url)
     except Exception:
@@ -151,7 +210,11 @@ def _login_web(cfg):
         if st == "approved":
             cfg["token"] = pr.json()["access_token"]
             _save(cfg)
-            print(_green("✓ logged in"))
+            if _ui is not None:
+                _ui.out.ok("Logged in")
+                _ui.out.command("petabyte --me", caption="Next: see your dashboard")
+            else:
+                print(_green("✓ logged in"))
             return
         if st in ("denied", "expired"):
             _die(f"browser login {st} — run `petabyte login --web` again")
@@ -168,9 +231,21 @@ def cmd_wallet(a, cfg):
     with _client(cfg) as c:
         r = c.get("/wallet")
     if r.status_code != 200:
-        _die("wallet failed", r)
+        _die("Could not load your wallet", r)
     w = r.json()
-    print(f"balance:  ${w['balance']}\nearnings: ${w['earnings']}")
+    if JSON:
+        print(json.dumps(w))
+        return
+    if _ui is None:
+        print(f"balance:  ${w['balance']}\nearnings: ${w['earnings']}")
+        return
+    rows = [("balance", ("money", f"${float(w.get('balance', 0)):,.2f}")),
+            ("earnings", f"${float(w.get('earnings', 0)):,.2f}")]
+    if w.get("withdrawable") is not None:
+        rows.append(("withdrawable", f"${float(w['withdrawable']):,.2f}"))
+    if w.get("clearing"):
+        rows.append(("clearing", f"${float(w['clearing']):,.2f}  (held {w.get('hold_hours', '?')}h)"))
+    _ui.out.kv(rows, title="Wallet (USD)")
 
 
 def cmd_specs(a, cfg):
@@ -179,8 +254,27 @@ def cmd_specs(a, cfg):
     if r.status_code != 200:
         _die("specs failed", r)
     specs = r.json()["specs"]
+    if JSON:
+        print(json.dumps({"specs": specs}))
+        return
     if not specs:
-        print("no bookable GPUs available right now")
+        if _ui is not None:
+            _ui.out.info("no bookable GPUs available right now — try again in a few minutes")
+        else:
+            print("no bookable GPUs available right now")
+        return
+    if _ui is not None:
+        rows = []
+        for sp in specs:
+            rep_ = sp.get("reputation_score", sp.get("reputation"))
+            tags = " ".join(t for t, on in (("confidential", sp.get("confidential")),
+                                            ("region\u2713", sp.get("region_verified"))) if on)
+            rows.append([sp["spec_id"], sp["gpu_model"] or "CPU", f"{sp['price_per_hour']:.2f}",
+                         sp["available_units"], rep_, sp["provider"], tags])
+        _ui.out.table(["ID", "GPU", "$/HR", "UNITS", "REP", "PROVIDER", ""], rows,
+                      aligns=["right", "left", "right", "right", "right", "left", "left"],
+                      title="GPUs you can rent right now (cheapest first)")
+        _ui.out.command("petabyte launch ollama --hours 1", caption="Rent one:")
         return
     print(_dim(f"  {'ID':>3}  {'GPU':<10} {'$/HR':>7}  {'UNITS':>5}  {'REP':>3}  PROVIDER"))
     for sp in specs:
@@ -235,7 +329,9 @@ def _bundle_project(entry, max_bytes=25 * 1024 * 1024):
     """tar.gz the entry's project folder (siblings + subpackages), skipping junk, secrets
     and files >8MB, and return (base64, entry_relpath, included_names) — or None if it's a
     lone file or the bundled code exceeds max_bytes (mount/download big data separately)."""
-    import tarfile, io, base64
+    import base64
+    import io
+    import tarfile
     entry = os.path.abspath(entry)
     root = os.path.dirname(entry) or "."
     IGNORE = {".git", "__pycache__", ".venv", "venv", "env", "node_modules", ".mypy_cache",
@@ -439,6 +535,25 @@ def cmd_earnings(a, cfg):
             _die("wallet failed", w)
         w = w.json()
         pays = c.get("/wallet/payouts")
+    if JSON:
+        print(json.dumps({"wallet": w, "payouts": pays.json().get("payouts", []) if pays.status_code == 200 else []}))
+        return
+    if _ui is not None:
+        _ui.out.kv([("balance", ("money", f"${w['balance']:,.2f}")), ("earnings", f"${w['earnings']:,.2f}"),
+                    ("withdrawable", f"${w['withdrawable']:,.2f}"),
+                    ("clearing", f"${w['clearing']:,.2f}  (held {w['hold_hours']}h)"),
+                    ("instant payout", ("status", "eligible") if w.get("instant_eligible") else ("dim", "not yet"))],
+                   title="Earnings (USD)")
+        ps = pays.json().get("payouts", []) if pays.status_code == 200 else []
+        if ps:
+            _ui.out.blank()
+            _ui.out.table(["AMOUNT", "KIND", "STATUS", "WHEN"],
+                          [[f"${p['amount_usd']:,.2f}", str(p["kind"])[:12], str(p["status"])[:10],
+                            str(p["created_at"])[:10]] for p in ps[:8]],
+                          aligns=["right", "left", "left", "left"], title="Recent payouts")
+        else:
+            _ui.out.note("no payouts yet — add a payout method on the earnings page, then withdraw.")
+        return
     print(_bold("Earnings"))
     print(f"  balance:      {_amber('$' + format(w['balance'], '.2f'))}")
     print(f"  earnings:     ${format(w['earnings'], '.2f')}")
@@ -496,7 +611,7 @@ def _node_sync_models(a, cfg):
     scheduler prefers THIS node for jobs that need a model it already holds."""
     try:
         from modelhub import ModelManager
-    except Exception:  # noqa: BLE001
+    except Exception:
         _die("model hub not available on this machine (cannot scan the local cache)")
     ids = ModelManager().cached_model_ids()
     with _client(cfg) as c:
@@ -626,10 +741,185 @@ def cmd_transcode(a, cfg):
         print(_green(f"✓ output → {a.out}") if saved else _amber("finished; no output ready yet"))
 
 
-def main():
-    p = argparse.ArgumentParser(prog="petabyte")
+def _require_product():
+    if petabyte_cli is None:
+        _die("this build of the CLI is missing its product layer (petabyte_cli) — reinstall: "
+             "pip install -U petabyte-client")
+
+
+def cmd_me(a, cfg):
+    """`petabyte --me` / `petabyte me`: the dashboard."""
+    _require_product()
+    from concurrent.futures import ThreadPoolExecutor
+
+    from petabyte_cli import agent as _agent
+    from petabyte_cli import api as _api
+    from petabyte_cli import dashboard as _dash
+    from petabyte_cli import sysinfo as _si
+    api_url = cfg["api_url"]
+    with _client(cfg) as c, _ui.out.status("Loading your dashboard…"):
+        with ThreadPoolExecutor(max_workers=3) as ex:
+            f_dash = ex.submit(_api.fetch_dashboard, c, api_url=api_url)
+            f_agent = ex.submit(_agent.detect)
+            f_snap = ex.submit(_si.snapshot, api_url=api_url, with_docker=False, cpu_interval=0.3)
+            st, snap = f_agent.result(), f_snap.result()
+            d = f_dash.result()
+    if JSON:
+        print(json.dumps(_dash.as_json(d, st, snap), default=str))
+        return
+    _dash.render(_ui.out, d, st, snap, update=_UPDATE)
+
+
+def cmd_doctor(a, cfg):
+    _require_product()
+    from petabyte_cli import agent as _agent
+    from petabyte_cli import doctor as _doc
+    from petabyte_cli import sysinfo as _si
+    with _ui.out.status("Checking…"):
+        st = _agent.detect()
+        snap = _si.snapshot(api_url=cfg["api_url"], with_docker=True, with_network=False, cpu_interval=0.1)
+        rep = _doc.run_checks(cfg=cfg, client_factory=_client, config_path=CONFIG, agent_state=st, snap=snap,
+                              update=_UPDATE)
+    if JSON:
+        print(json.dumps(rep.as_dict(), default=str))
+    else:
+        _doc.render(_ui.out, rep)
+    sys.exit(0 if rep.healthy else 1)
+
+
+def cmd_jobs(a, cfg):
+    """Your running instances and recent bookings (buyer view)."""
+    _require_product()
+    from petabyte_cli import api as _api
+    with _client(cfg) as c:
+        _api.fetch_me(c, cfg["api_url"])
+        vms = _api._get(c, "/vms")
+        bk = _api._get(c, "/account/bookings", {"limit": int(getattr(a, "limit", 10) or 10)})
+    if JSON:
+        print(json.dumps({"vms": vms.data, "bookings": bk.data}, default=str))
+        return
+    live = [v for v in (vms.get("vms") or []) if str(v.get("status", "")).lower() in _api.RUNNING_VM_STATES]
+    if live:
+        _ui.out.table(["VM", "TEMPLATE", "STATUS", "HOURS LEFT", "$/HR", "ADDRESS"],
+                      [[v.get("vm_id"), v.get("template"), v.get("status"), v.get("hours_left"),
+                        f"{float(v.get('hourly_rate') or 0):.2f}",
+                        (v.get("url") or {}).get("hostname") if isinstance(v.get("url"), dict) else v.get("url")]
+                       for v in live], title="Running now")
+    else:
+        _ui.out.info("Nothing running right now.")
+    rows = bk.get("bookings") or []
+    if rows:
+        _ui.out.blank()
+        _ui.out.table(["ID", "ROLE", "GPU", "HOURS", "AMOUNT", "STATUS", "WHEN"],
+                      [[b.get("id"), b.get("role"), b.get("gpu_model"), b.get("hours"),
+                        f"${float(b.get('gross_amount') or 0):,.2f}", b.get("status"), str(b.get("created_at"))[:16]]
+                       for b in rows], title="Recent bookings")
+    if not live:
+        _ui.out.command("petabyte specs", caption="Rent a GPU:")
+
+
+def cmd_activity(a, cfg):
+    _require_product()
+    from petabyte_cli import api as _api
+    with _client(cfg) as c:
+        _api.fetch_me(c, cfg["api_url"])
+        n = _api._get(c, "/notifications")
+    items = n.get("notifications") or []
+    if JSON:
+        print(json.dumps({"notifications": items}, default=str))
+        return
+    if not items:
+        _ui.out.info("No activity yet.")
+        return
+    _ui.out.table(["WHEN", "EVENT", "SUBJECT", "STATUS"],
+                  [[str(i.get("created_at"))[:16], i.get("event_type"), i.get("subject") or "", i.get("status")]
+                   for i in items[:20]], title="Recent activity")
+
+
+def cmd_version(a, cfg):
+    _require_product()
+    info = _UPDATE or (_vc.check_for_update() if _vc.should_check(sys.stdout) or getattr(a, "check", False) else None)
+    if JSON:
+        print(json.dumps({"cli": _vc.installed_version(), "python": _vc.python_version(),
+                          "python_supported": _vc.python_supported(),
+                          "latest": info.latest if info else None, "update_available": bool(info and info.newer)}))
+        return
+    _ui.out.brand(f"CLI v{_vc.installed_version()}")
+    rows = [("Python", f"{_vc.python_version()}  ({'supported' if _vc.python_supported() else 'UNSUPPORTED'})")]
+    if info and info.latest:
+        rows.append(("Latest on PyPI", info.latest + ("  (update available)" if info.newer else "  (up to date)")))
+    else:
+        rows.append(("Latest on PyPI", ("dim", "not checked (offline, CI, or PETABYTE_NO_UPDATE_CHECK=1)")))
+    _ui.out.kv(rows)
+    if info and info.newer:
+        _ui.out.command(info.upgrade_command, caption="Update with:")
+    if not _vc.python_supported():
+        _ui.out.warn(_vc.python_support_message())
+
+
+def cmd_agent(a, cfg):
+    _require_product()
+    from petabyte_cli import agent_cmds as _ac
+    what = getattr(a, "agent_cmd", None) or "status"
+    yes = bool(getattr(a, "yes", False))
+    if what == "install":
+        return _ac.cmd_install(_ui.out, cfg, _client, login=lambda: _login_web(cfg),
+                               sell=getattr(a, "sell", None), price=getattr(a, "price", None), yes=yes,
+                               no_egress_lockdown=bool(getattr(a, "no_egress_lockdown", False)),
+                               dry_run=bool(getattr(a, "dry_run", False)), reinstall=bool(getattr(a, "reinstall", False)))
+    if what in ("start", "run"):
+        return _ac.cmd_run(_ui.out, cfg, _client, follow=getattr(a, "follow", None),
+                           foreground=bool(getattr(a, "foreground", False)))
+    if what in ("stop", "kill"):
+        return _ac.cmd_kill(_ui.out, cfg, yes=yes, force=bool(getattr(a, "force", False)))
+    if what == "logs":
+        return _ac.cmd_logs(_ui.out, cfg, lines=int(getattr(a, "lines", 30) or 30))
+    return _ac.cmd_status(_ui.out, cfg, _client, json_mode=JSON)
+
+
+def _startup(a):
+    """Python-version and update checks: quiet, cached, never blocking, never fatal."""
+    global _UPDATE
+    if petabyte_cli is None or JSON:
+        return
+    if not _vc.python_supported():
+        _ui.err.warn(_vc.python_support_message())
+    if getattr(a, "version", False) or a.cmd == "login" or not _vc.should_check(sys.stdout):
+        return
+    try:
+        _UPDATE = _vc.check_for_update()
+    except Exception:
+        _UPDATE = None
+    if _UPDATE and _UPDATE.newer and not getattr(a, "me", False):
+        for ln in _vc.notice_lines(_UPDATE):
+            _ui.out.note(ln)
+        _ui.out.blank()
+
+
+def _build_parser():
+    p = argparse.ArgumentParser(prog="petabyte", add_help=False,
+                                description="Rent verified GPUs, or earn by selling yours.")
+    p.add_argument("-h", "--help", action="store_true", help="show this help")
     p.add_argument("--api", help="API base URL (overrides saved config)")
-    sub = p.add_subparsers(dest="cmd", required=True)
+    p.add_argument("--json", action="store_true", help="machine-readable output (where supported)")
+    p.add_argument("-v", "--verbose", action="store_true", help="full technical detail on errors")
+    p.add_argument("-V", "--version", action="store_true", help="CLI / Python / update status")
+    p.add_argument("--me", action="store_true", help="your dashboard")
+    p.add_argument("--install-agent", dest="install_agent", action="store_true", help="guided seller-agent setup")
+    p.add_argument("--run-agent", dest="run_agent", action="store_true", help="start the seller agent")
+    p.add_argument("--kill-agent", dest="kill_agent", action="store_true", help="stop the seller agent safely")
+    p.add_argument("-y", "--yes", action="store_true", help="assume yes for confirmations (install / stop)")
+    p.add_argument("--force", action="store_true", help="--kill-agent: stop even with active jobs")
+    p.add_argument("--no-follow", dest="follow", action="store_false", default=None,
+                   help="--run-agent: don't follow the log after starting")
+    p.add_argument("--foreground", action="store_true", help="--run-agent: run attached (no service manager)")
+    p.add_argument("--sell", choices=["gpu", "cpu", "all"], help="--install-agent: what to sell (skips the question)")
+    p.add_argument("--price", type=float, help="--install-agent: price per hour in USD (default: automatic)")
+    p.add_argument("--no-egress-lockdown", dest="no_egress_lockdown", action="store_true",
+                   help="--install-agent: don't restrict container egress")
+    p.add_argument("--dry-run", dest="dry_run", action="store_true", help="--install-agent: show the plan only")
+    p.add_argument("--reinstall", action="store_true", help="--install-agent: reinstall even if present")
+    sub = p.add_subparsers(dest="cmd", required=False)
 
     s = sub.add_parser("login", help="authorize in the browser (device flow) — no password on "
                                      "the CLI; token also via $PETABYTE_TOKEN")
@@ -699,29 +989,136 @@ def main():
     s.add_argument("--container", default="mp4", help="mp4|mkv|webm|mov|…")
     s.add_argument("--out", default="./transcoded", help="download output here")
 
+    # product layer: dashboard, doctor, jobs, activity, agent, menu
+    sub.add_parser("me", help="your dashboard (same as --me)")
+    sub.add_parser("doctor", help="diagnose account, network, Docker, GPU and agent problems")
+    j = sub.add_parser("jobs", help="your running instances and recent bookings")
+    j.add_argument("--limit", type=int, default=10)
+    sub.add_parser("activity", help="recent notifications")
+    sub.add_parser("menu", help="the guided menu")
+    sub.add_parser("version", help="CLI / Python / update status")
+    ag = sub.add_parser("agent", help="seller agent: install | start | stop | status | logs")
+    ags = ag.add_subparsers(dest="agent_cmd", required=False)
+    # SUPPRESS, not a default: these same options exist on the ROOT parser, and argparse writes
+    # a subparser's default over whatever the root already parsed. `petabyte --yes agent stop`
+    # would therefore arrive at cmd_agent with yes=False. With SUPPRESS the attribute is set only
+    # when the option is actually present on the sub-command, so the root value survives.
+    _S = argparse.SUPPRESS
+    ai = ags.add_parser("install", help="guided setup (same as --install-agent)")
+    ai.add_argument("--sell", choices=["gpu", "cpu", "all"], default=_S)
+    ai.add_argument("--price", type=float, default=_S)
+    ai.add_argument("--no-egress-lockdown", dest="no_egress_lockdown", action="store_true", default=_S)
+    ai.add_argument("--dry-run", dest="dry_run", action="store_true", default=_S)
+    ai.add_argument("--reinstall", action="store_true", default=_S)
+    ai.add_argument("-y", "--yes", action="store_true", default=_S)
+    ar = ags.add_parser("start", help="start the agent (same as --run-agent)")
+    ar.add_argument("--no-follow", dest="follow", action="store_false", default=_S)
+    ar.add_argument("--foreground", action="store_true", default=_S)
+    ak = ags.add_parser("stop", help="stop the agent (same as --kill-agent)")
+    ak.add_argument("-y", "--yes", action="store_true", default=_S)
+    ak.add_argument("--force", action="store_true", default=_S)
+    ags.add_parser("status", help="what the agent is doing right now")
+    al = ags.add_parser("logs", help="follow the agent log")
+    al.add_argument("-n", "--lines", type=int, default=30)
+
     # model hub: discover/pull/manage AI models (Hugging Face-grade UX). Owns `model`, `pull`, `auth`;
     # `run` is shared with the compute flow above and dispatched smartly below.
     if mh_cli is not None:
         mh_cli.register(sub, include=("model", "pull", "auth"))
+    return p
 
-    a = p.parse_args()
-    cfg = _cfg()
-    if a.api:
-        cfg["api_url"] = a.api
 
+COMMANDS = {"deposit": cmd_deposit, "login": cmd_login, "wallet": cmd_wallet, "specs": cmd_specs,
+            "run": cmd_run, "launch": cmd_launch, "vpn": cmd_vpn, "earnings": cmd_earnings,
+            "node": cmd_node, "ask": cmd_ask, "render": cmd_render, "transcode": cmd_transcode,
+            "me": cmd_me, "doctor": cmd_doctor, "jobs": cmd_jobs, "activity": cmd_activity,
+            "version": cmd_version, "agent": cmd_agent}
+
+
+def _dispatch(a, cfg, p):
+    if a.help:
+        if petabyte_cli is not None:
+            from petabyte_cli import help as _help
+            _help.render(_ui.out, version=_vc.installed_version())
+        else:
+            p.print_help()
+        return 0
+    if a.version or a.cmd == "version":
+        return cmd_version(a, cfg)
+    if a.me:
+        return cmd_me(a, cfg)
+    if a.install_agent:
+        a.agent_cmd = "install"; return cmd_agent(a, cfg)
+    if a.run_agent:
+        a.agent_cmd = "start"; return cmd_agent(a, cfg)
+    if a.kill_agent:
+        a.agent_cmd = "stop"; return cmd_agent(a, cfg)
+    if a.cmd is None or a.cmd == "menu":
+        if petabyte_cli is not None and _ui.out.interactive:
+            from petabyte_cli import menu as _menu
+            return _menu.run(_ui.out, lambda argv: _run_menu_choice(argv, cfg, p))
+        if petabyte_cli is not None:
+            from petabyte_cli import help as _help
+            _help.render(_ui.out, version=_vc.installed_version())
+        else:
+            p.print_help()
+        return 0
     if mh_cli is not None and a.cmd in ("model", "pull", "auth"):
-        sys.exit(mh_cli.handle(a) or 0)
+        return mh_cli.handle(a) or 0
     if a.cmd == "run" and _is_model_ref(a.file):
         if mh_cli is None:
             _die("model runtime unavailable (modelhub not importable)")
         ns = __import__("argparse").Namespace(
             id=a.file, format=a.format, quantization=a.quantization, revision=a.revision,
             force=a.force, home=None)
-        sys.exit(mh_cli.cmd_run(ns) or 0)
-    {"deposit": cmd_deposit, "login": cmd_login,
-     "wallet": cmd_wallet, "specs": cmd_specs, "run": cmd_run, "launch": cmd_launch, "vpn": cmd_vpn,
-     "earnings": cmd_earnings, "node": cmd_node, "ask": cmd_ask,
-     "render": cmd_render, "transcode": cmd_transcode}[a.cmd](a, cfg)
+        return mh_cli.cmd_run(ns) or 0
+    return COMMANDS[a.cmd](a, cfg) or 0
+
+
+def _run_menu_choice(argv, cfg, p):
+    """Run one menu selection as if it had been typed. The globals are re-applied from the
+    chosen argv, so a menu entry carrying --json/--verbose is honoured like a real invocation."""
+    global JSON, VERBOSE
+    a = _build_parser().parse_args(argv)
+    JSON, VERBOSE = bool(a.json), bool(a.verbose)
+    if _ui is not None:
+        _ui.out.quiet = JSON
+    return _dispatch(a, cfg, p)
+
+
+def main(argv=None):
+    global JSON, VERBOSE
+    p = _build_parser()
+    a = p.parse_args(argv)
+    JSON, VERBOSE = bool(a.json), bool(a.verbose)
+    if _ui is not None:
+        _ui.refresh()
+        _ui.out.quiet = JSON
+    cfg = _cfg()
+    if a.api:
+        cfg["api_url"] = a.api
+    _startup(a)
+    try:
+        rc = _dispatch(a, cfg, p)
+    except KeyboardInterrupt:
+        if _ui is not None:
+            _ui.err.blank(); _ui.err.info("Cancelled.")
+        sys.exit(130)
+    except SystemExit:
+        raise
+    except Exception as e:
+        if petabyte_cli is None:
+            raise
+        err = e if isinstance(e, _errors.CliError) else _errors.from_exception(e, cfg.get("api_url", ""))
+        if VERBOSE:
+            import traceback
+            traceback.print_exc()
+        if JSON:
+            _ui.err.raw(json.dumps(err.as_dict(), default=str))
+        else:
+            err.render(_ui.err)
+        sys.exit(getattr(err, "exit_code", 1))
+    sys.exit(int(rc or 0))
 
 
 def _is_model_ref(arg):

@@ -2,58 +2,116 @@
      mirrored here by scripts/build_cli_package.py. Open issues/PRs against this repo for the
      client; the server is closed-source. -->
 
-# Petabyte CLI & Dashboard
+# Petabyte CLI
 
-## CLI
-Installed from PyPI, the `petabyte` command is a thin client (only needs `httpx` — it just talks
-to the API over HTTPS, so it never pulls in the server):
+`petabyte` is the command line for the Petabyte GPU marketplace — for **buyers** who rent verified
+GPUs, for **sellers** who earn with their own hardware, and for anyone who wants an AI model on their
+machine. Install → sign in → choose buyer or seller → go.
+
 ```bash
-pip install petabyte-client                          # the command it installs is `petabyte`
-# Talks to https://petabyte.market by default — nothing to configure. Point at a
-# test/local server with:  export PETABYTE_API_URL=http://localhost:8000  (or pass --api URL)
-export PETABYTE_API_KEY=pk_...                        # your account key — sign in on the web (Google),
-                                                     # create an 'account'-scoped key; no passwords
-petabyte deposit 100
-petabyte specs                                       # a readable, cheapest-first GPU table
-petabyte launch ollama --hours 2                     # one-click app: cheapest verified GPU, started
-petabyte run hello.ipynb --gpu H100 --hours 1        # run a notebook/.py on a rented GPU
-petabyte ask "explain attention" --model llama3.2    # pay-per-token Inference API (OpenAI-compatible)
-petabyte wallet
+pip install -U petabyte-client        # the command it installs is `petabyte`
+petabyte login                        # sign in with your browser — no password ever touches the CLI
+petabyte --me                         # your dashboard: account, wallet, what's running, agent, system
 ```
-`petabyte ask` uses an `inference`-scoped API key — pass `--key`, set `PETABYTE_API_KEY`, or
-save it as `api_key` in your CLI config; the answer prints to stdout (the token/cost line to stderr).
-Model management is included — `petabyte pull <publisher/model>`, `petabyte model list/inspect/remove`,
-and `petabyte run <model-id>` work straight from the pip install (the model hub is pure standard
-library, so it adds no dependency beyond httpx):
+
+Run `petabyte` on its own for a guided menu, or `petabyte --help` for the grouped command list.
+
+## 5-minute Seller Quickstart
+
+Turn an idle GPU (or CPU) into income. On the machine you want to sell:
+
 ```bash
-petabyte pull Qwen/Qwen3-8B          # verified, resumable download into ~/.petabyte
-petabyte model list                  # what's in your local cache
-petabyte run Qwen/Qwen3-8B           # start a model runtime
+pip install -U petabyte-client
+petabyte login                 # browser sign-in
+petabyte --install-agent       # guided wizard: checks the system, mints a node key, runs the official installer
+petabyte --run-agent           # starts the seller agent and follows it coming online
+petabyte --me                  # watch the node, the earning rate and your wallet
 ```
-The package is built from the repo-root `pyproject.toml` (`name = "petabyte-client"`; the command
-stays `petabyte`), which bundles this
-CLI module plus the `modelhub` package. From a source checkout you can also run it directly with
-`python cli/petabyte.py <cmd>`, or `pip install .` from the repo root.
-`run` books the cheapest matching GPU, escrows funds, dispatches the notebook,
-polls, and prints the result. `.ipynb` (code cells) and `.py` files are supported.
 
-### Output & config
-- **Human output:** semantic colour (green=ok, yellow=pending, red=error, cyan=info) with
-  aligned tables. Colour turns **off** automatically when stdout is not a TTY or `NO_COLOR`
-  is set — safe for scripts and CI. The buyer `petabyte` client uses its own small inline
-  colour helpers (no dependency beyond `httpx`); it does **not** import `cli_ui.py`.
-- `PETABYTE_API_URL` (or `--api`) selects the API — defaults to `https://petabyte.market`;
-  set it to `http://localhost:8000` (or any test host) to point at a non-production server.
-  `PETABYTE_CONFIG=/path/cli.json` isolates the saved token/API (handy in CI or tests).
+The wizard checks Python, Docker, the GPU and the network first, tells you exactly what to fix if
+something is missing, then downloads the official installer **to a file** from your Petabyte host
+(never `curl | bash`), shows what it will do (it needs administrator rights: Docker, the NVIDIA
+container toolkit, a systemd service) and asks before running it. The node key it creates goes to the
+installer through the environment only — it is never printed or logged.
 
-> Note: a stable `--json`/`PETABYTE_JSON` machine-readable mode and a `doctor`
-> health-gate command exist in the **seller agent CLI** (`lumaris_agent/agent_cli.py`),
-> not in this buyer client. The shared `cli_ui.py` presentation layer is likewise used
-> by the agent and desktop app, not by `petabyte.py`.
+Later: `petabyte --kill-agent` stops the agent safely (it warns if a job is running),
+`petabyte agent status` / `petabyte agent logs` show what it is doing, `petabyte earnings` and
+`petabyte node status <id>` show the money and the node.
 
-## Dashboard
-Served by the API at `/` (same-origin, no CORS setup). Start the API and open
-`http://localhost:8000/` — live nodes/jobs/GMV stats, wallet + deposit, the GPU
-inventory with a live $/hr-vs-AWS savings column, and one-click job runs.
+- Linux: the agent is the `petabyte-agent` systemd service under `/opt/petabyte-agent`.
+- Windows: the same service inside the Ubuntu-24.04 WSL2 distro the installer sets up
+  (run the install from an **Administrator** PowerShell).
+- macOS: the seller agent is not supported yet; buying works everywhere.
 
-Both need an attested, online seller node (run the agent) to actually execute jobs.
+## Buyer Quickstart
+
+```bash
+petabyte login
+petabyte deposit 20                                   # add funds (test credit in the sandbox)
+petabyte specs                                        # GPUs you can rent right now, cheapest first
+petabyte launch ollama --hours 2                      # one-click app on the cheapest verified GPU
+petabyte run train.ipynb --gpu "RTX 4090" --hours 1   # run a notebook / .py on a rented GPU
+petabyte jobs                                         # what's running, recent bookings
+petabyte ask "explain attention" --model llama3.2     # pay-per-token inference (OpenAI-compatible)
+```
+
+## Commands
+
+| Group | Command | What it does |
+|---|---|---|
+| **Account** | `--me` / `me` | dashboard: identity, wallet, current workflow, agent, expected return (estimates labelled), local CPU/RAM/GPU |
+| | `login` | browser device-flow sign-in; saves a token in `~/.petabyte/cli.json` (0600) |
+| | `wallet` · `deposit <usd>` · `activity` | balance & earnings · add funds · recent notifications |
+| | `doctor` | diagnoses Python, network, API, account, Docker, GPU, agent — with the command to run next |
+| **Seller** | `--install-agent` | guided seller setup (`--sell gpu\|cpu\|all`, `--price`, `--dry-run`, `--yes`) |
+| | `--run-agent` | preflight → start the service → status panel → follow the log (`--no-follow`) |
+| | `--kill-agent` | graceful stop; warns about active jobs (`--force` to stop anyway); idempotent |
+| | `agent status\|logs\|install\|start\|stop` | the same as subcommands |
+| | `earnings` · `node status <id>` · `node sync-models <id>` | payouts · one node in detail · report cached models |
+| **Buyer** | `specs` · `launch <template>` · `run <file>` · `jobs` | rent and run |
+| | `ask "<prompt>"` · `render` · `transcode` · `vpn <booking>` | inference · Blender · NVENC · WireGuard config |
+| **Models** | `model search\|info\|pull\|list\|inspect\|remove` · `pull <id>` · `run <model-id>` | local model hub (no account needed) |
+| **System** | `--version` · `--json` · `--verbose` · `--api <url>` · `-y/--yes` | version & update status · machine-readable output · full error detail · another host · assume yes |
+
+Every subcommand keeps its full option list under `petabyte <command> --help`.
+
+## Output, config & environment
+
+- **Rich terminal UI** (panels, tables, spinners) on a real terminal; **plain, aligned text** on a pipe,
+  in CI, under `NO_COLOR=1` / `PETABYTE_COLOR=never` / `TERM=dumb`, or when `rich` is missing. The
+  words are the same in both. `PETABYTE_UI=plain|rich` forces a renderer, `PETABYTE_ASCII=1` avoids
+  Unicode symbols, `PETABYTE_NONINTERACTIVE=1` makes every prompt take its default.
+- `--json` (before the command) gives machine-readable output for `--me`, `doctor`, `wallet`,
+  `specs`, `earnings`, `jobs`, `activity`, `agent status`, `--version` — never coloured, never chatty.
+- **Update check:** once a day, on an interactive terminal only, the CLI asks PyPI (1.5 s timeout)
+  whether a newer `petabyte-client` exists and prints a one-line hint. It never blocks, never fails a
+  command, and is skipped in CI or with `PETABYTE_NO_UPDATE_CHECK=1`. Python < 3.9 gets a clear
+  unsupported-version message.
+- **API host:** `--api <url>` > `PETABYTE_API_URL` > the saved file > `https://petabyte.market`.
+  `PETABYTE_CONFIG=/path/cli.json` isolates the saved token (CI, tests).
+- **Auth:** the saved token from `petabyte login`, or `PETABYTE_TOKEN`, or an `account`-scoped API
+  key in `PETABYTE_API_KEY` (sent as `X-API-KEY`). `petabyte ask` uses an `inference`-scoped key.
+- Errors are written for humans — what happened, why, what to run next — with the technical detail
+  dimmed last; `--verbose` adds the traceback. Secrets (tokens, keys, node keys) never appear.
+
+## When something is off
+
+```bash
+petabyte doctor
+```
+
+## For developers
+
+From a source checkout: `python cli/petabyte.py <cmd>` (the product layer lives in `cli/petabyte_cli/`:
+`ui.py`, `version_check.py`, `sysinfo.py`, `api.py`, `dashboard.py`, `agent.py`, `agent_cmds.py`,
+`doctor.py`, `help.py`, `menu.py`). Tests: `python cli/petabyte_cli_test.py` (no server),
+`python cli/cli_ui_test.py`, `python cli/cli_petabyte_test.py` (boots a local API).
+The package is built from the repo-root `pyproject.toml` (`name = "petabyte-client"`, dependencies
+`httpx`, `rich`, `tqdm`; optional extra `system` = `psutil` for live CPU/RAM) and mirrored to the public
+repo by `scripts/build_cli_package.py`.
+
+## Dashboard (web)
+
+Served by the API at `/` — live nodes/jobs stats, wallet + deposit, the GPU inventory with a live
+$/hr-vs-AWS savings column, and one-click job runs. Both the web console and the CLI need an
+attested, online seller node (run the agent) to actually execute jobs.
