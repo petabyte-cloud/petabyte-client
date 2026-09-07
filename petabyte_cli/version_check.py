@@ -22,7 +22,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 PACKAGE = "petabyte-client"
-FALLBACK_VERSION = "0.3.1"
+FALLBACK_VERSION = "0.3.2"
 MIN_PYTHON = (3, 9)
 PYPI_URL = f"https://pypi.org/pypi/{PACKAGE}/json"
 CACHE_TTL_S = 24 * 3600
