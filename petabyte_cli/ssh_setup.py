@@ -44,7 +44,7 @@ from . import errors, sysinfo
 # guessable: production currently leaves VM_DNS_ZONE empty, so a VM answers at
 # `<id>.petabyte.market`, not `<id>.vm.petabyte.market`. So we read it off a real VM's hostname
 # whenever the account has one, and only fall back to the API's own domain.
-DEFAULT_VM_ZONE = "petabyte.market"
+DEFAULT_VM_ZONE = "vm.petabyte.market"   # VMs answer under the wildcard *.vm.petabyte.market
 VM_ID_LEN = 12                              # db._rand_vm_id: [a-z][a-z0-9]{11}
 KEY_NAME = "petabyte_ed25519"
 BLOCK_BEGIN = "# >>> petabyte ssh (managed) >>>"
@@ -441,7 +441,15 @@ def bare_vm_id(target: str) -> str:
 
 
 def host_for(vm_id: str, zone: str) -> str:
-    return f"{bare_vm_id(vm_id)}.{zone}"
+    """Resolve what the user typed to the VM host. If they pasted a FULLY-QUALIFIED host
+    (`<id>.vm.petabyte.market`, with or without a `user@`), use it verbatim — don't strip it to the
+    id and re-append our own zone (that dropped the `.vm` and produced `<id>.petabyte.market`). Only
+    a BARE id gets the zone appended."""
+    s = (vm_id or "").strip()
+    if "@" in s:
+        s = s.split("@", 1)[1]
+    s = s.split("/")[0]
+    return s if "." in s else f"{s}.{zone}"
 
 
 def ssh_command(vm_id: str, zone: str, user: str = "root", configured: bool = True,
