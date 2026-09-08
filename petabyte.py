@@ -361,6 +361,27 @@ def _bundle_project(entry, max_bytes=25 * 1024 * 1024):
     return base64.b64encode(buf.getvalue()).decode(), os.path.relpath(entry, root), included
 
 
+def _warn_unhashed_requirements(root):
+    """Your job runs on a SELLER-operated host that controls its network. If your code pip-installs
+    over that network from an UNHASHED requirements.txt, the seller can MITM the install (swap a
+    package for a malicious one). Warn the buyer to pin hashes so pip verifies every download."""
+    req = os.path.join(root, "requirements.txt")
+    if not os.path.exists(req):
+        return
+    try:
+        body = open(req, encoding="utf-8", errors="replace").read()
+    except OSError:
+        return
+    has_pkgs = any(ln.strip() and not ln.strip().startswith("#") for ln in body.splitlines())
+    if has_pkgs and "--hash=" not in body:
+        print(_amber(
+            "! requirements.txt has no pinned hashes. This job runs on a seller-operated host that "
+            "controls the network, so an unhashed `pip install` can be MITM'd. Pin hashes:\n"
+            "    pip-compile --generate-hashes -o requirements.txt requirements.in\n"
+            "  then in your entry script: pip install --require-hashes -r requirements.txt\n"
+            "  (see docs/SECURITY_AUDIT_PEER_TO_PEER.md)."))
+
+
 def _run_payload(a):
     """The notebook `code` payload for `run`: a JSON project bundle when the entry has
     local dependencies, else the plain single-file source (unchanged behaviour)."""
@@ -375,6 +396,7 @@ def _run_payload(a):
         siblings = []
     auto = bool(siblings) or os.path.exists(os.path.join(root, "requirements.txt"))
     if getattr(a, "deps", None) is True or auto:
+        _warn_unhashed_requirements(root)
         b = _bundle_project(a.file)
         if b is None:
             print(_amber("! project code exceeds 25MB — running the single file only "
