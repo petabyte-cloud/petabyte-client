@@ -906,21 +906,28 @@ def cmd_ssh(a, cfg):
     if getattr(a, "status", False):
         return _ssh.cmd_status(_ui.out, cfg, _client, json_mode=JSON)
     vm = getattr(a, "vm", None)
+    user = a.user
+    # People paste the whole target they were shown (`root@<id>.<zone>`). Honor an embedded login
+    # user instead of prepending root to it, and let host construction strip the id down (see
+    # ssh_setup.bare_vm_id) — otherwise this became `ssh root@root@<id>.<zone>.<zone>`.
+    if vm and "@" in vm:
+        head, vm = vm.split("@", 1)
+        user = head or user
     if getattr(a, "print_only", False):
-        return _ssh.connect(_ui.out, cfg, vm, user=a.user, print_only=True, client_factory=_client)
+        return _ssh.connect(_ui.out, cfg, vm, user=user, print_only=True, client_factory=_client)
     # An already-set-up machine connecting to a named VM should just connect — the wizard is for
     # the first run (or when something is missing).
     if vm and not getattr(a, "setup", False):
         st = _ssh.S.detect(cfg)
         if st.configured and st.chosen:
-            return _ssh.connect(_ui.out, cfg, vm, user=a.user, client_factory=_client)
+            return _ssh.connect(_ui.out, cfg, vm, user=user, client_factory=_client)
     return _ssh.cmd_setup(_ui.out, cfg, _client, login=lambda: _login_web(cfg),
                           yes=bool(getattr(a, "yes", False)),
                           new_key=bool(getattr(a, "new_key", False)),
                           use_key=getattr(a, "key", None),
                           passphrase=bool(getattr(a, "passphrase", False)),
                           dry_run=bool(getattr(a, "dry_run", False)),
-                          user=a.user, connect_vm=vm)
+                          user=user, connect_vm=vm)
 
 
 def _startup(a):

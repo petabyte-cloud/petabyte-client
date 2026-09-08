@@ -426,8 +426,22 @@ def config_host_pattern(zone: str) -> str:
     return "?" * VM_ID_LEN + f".{zone}"
 
 
+def bare_vm_id(target: str) -> str:
+    """Reduce whatever the user typed to just the VM-id label.
+
+    People paste the whole ssh target they were shown — `root@<id>.test.petabyte.market` — so the
+    naive `f"{vm_id}.{zone}"` produced `<id>.<zone>.<zone>` and `f"{user}@{host}"` then produced
+    `root@root@…`. A VM-id is a single opaque label, so: drop any `user@` prefix, tolerate a pasted
+    URL-ish form, and keep the first dotted label."""
+    s = (target or "").strip()
+    if "@" in s:                       # `user` is passed separately; the login user is not the id
+        s = s.split("@", 1)[1]
+    s = s.split("/")[0]                # tolerate a stray path/scheme fragment
+    return s.split(".")[0] or s        # the id is the leaf label; a bare id has no dot
+
+
 def host_for(vm_id: str, zone: str) -> str:
-    return f"{vm_id}.{zone}"
+    return f"{bare_vm_id(vm_id)}.{zone}"
 
 
 def ssh_command(vm_id: str, zone: str, user: str = "root", configured: bool = True,
