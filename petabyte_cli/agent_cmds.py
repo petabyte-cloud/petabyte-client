@@ -240,7 +240,7 @@ def cmd_install(ui, cfg, client_factory, *, login: Callable[[], None] | None = N
     if sell is None:
         ui.line("What would you like to sell?")
         options = (["GPU  (recommended — rent this GPU by the hour)"] if gpus else []) + \
-                  ["CPU only  (no GPU jobs)", "All available resources  (GPU + CPU; disk and idle mining can be switched on in the console)"]
+                  ["CPU only  (no GPU jobs)", "All available resources  (GPU + CPU)"]
         pick = ui.choose("Choice", options, default=1)
         chosen = options[pick - 1]
         sell = "gpu" if chosen.startswith("GPU") else "cpu" if chosen.startswith("CPU") else "all"

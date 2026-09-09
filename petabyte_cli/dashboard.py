@@ -250,8 +250,6 @@ def expected_return_rows(d: apimod.Dashboard) -> list[tuple[str, Any]] | str | N
         months = [e.get("monthly_usd") for e in ests if e.get("monthly_usd") is not None]
         if months:
             rows.append(("Estimated / month", f"{money(min(months))} – {money(max(months))}"))
-        if f.get("idle_enabled") and f.get("idle_mining_daily_usd"):
-            rows.append(("Idle mining", f"+{money(f.get('idle_mining_daily_usd'))}/day while unrented"))
         rows.append(("Basis", ("dim", f.get("note") or "Estimate from your listed price at typical utilization — actual earnings depend on demand.")))
         return rows
     if d.spend.ok:

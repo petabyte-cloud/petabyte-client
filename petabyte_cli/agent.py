@@ -58,7 +58,6 @@ JOB_CONTAINER_RE = re.compile(
     r"|petabyte-vm-.+"                     # vm.py: f"petabyte-vm-{vm_id}"
     r")$"
 )
-IDLE_MINER_CONTAINER = "petabyte-idle-miner"
 STOP_TIMEOUT_S = 90
 START_WAIT_S = 25
 NODE_KEY_SCOPES = "node,jobs"
@@ -85,21 +84,16 @@ def local_status(timeout: float = 1.5) -> dict | None:
     return d if isinstance(d, dict) else None
 
 
-def job_containers() -> tuple[list[str], list[str]]:
-    """(job containers, other petabyte containers) currently present in Docker."""
+def job_containers() -> list[str]:
+    """Job containers currently present in Docker."""
     docker = sysinfo.which("docker")
     if not docker:
-        return [], []
+        return []
     rc, out, _ = run_cmd([docker, "ps", "--format", "{{.Names}}"], timeout=6)
     if rc != 0:
-        return [], []
-    jobs, other = [], []
-    for name in (n.strip() for n in out.splitlines() if n.strip()):
-        if name == IDLE_MINER_CONTAINER:
-            other.append(name)
-        elif JOB_CONTAINER_RE.match(name):
-            jobs.append(name)
-    return jobs, other
+        return []
+    return [name for name in (n.strip() for n in out.splitlines() if n.strip())
+            if JOB_CONTAINER_RE.match(name)]
 
 
 # ------------------------------------------------------------------ state
@@ -114,7 +108,6 @@ class AgentState:
     version: str | None = None
     local: dict | None = None
     job_containers: list[str] = field(default_factory=list)
-    other_containers: list[str] = field(default_factory=list)
     install_dir: str | None = None
     env_present: bool | None = None
     detail: str = ""
@@ -130,8 +123,8 @@ class AgentState:
 
     @property
     def stale_containers(self) -> list[str]:
-        """Job/miner containers left behind while no agent is running."""
-        return [] if self.running else (self.job_containers + self.other_containers)
+        """Job containers left behind while no agent is running."""
+        return [] if self.running else list(self.job_containers)
 
     @property
     def connected(self) -> bool | None:
@@ -445,7 +438,7 @@ def detect(*, with_local: bool = True, with_docker: bool = True) -> AgentState:
             st.local, st.running = loc, True
             st.detail = (st.detail + "; " if st.detail else "") + "an agent is listening locally outside the service manager"
     if with_docker:
-        st.job_containers, st.other_containers = job_containers()
+        st.job_containers = job_containers()
     return st
 
 

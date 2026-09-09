@@ -600,7 +600,6 @@ def _node_status(a, cfg):
             _die("dashboard failed", dash)
         dash = dash.json()
         models = c.get(f"/nodes/{sid}/models")
-        disk = c.get(f"/nodes/{sid}/disk")
     node = next((n for n in dash.get("nodes", []) if n.get("spec_id") == sid), None)
     if not node:
         _die(f"node {sid} not found (is it one of yours?)")
@@ -621,9 +620,6 @@ def _node_status(a, cfg):
             print(f"  models cached: {len(ms)}" + _dim("  " + ", ".join(ms[:6]) + (" …" if len(ms) > 6 else "")))
         else:
             print("  models cached: 0" + _dim(f"  (run: petabyte node sync-models {sid})"))
-    if disk.status_code == 200 and disk.json().get("enabled"):
-        d = disk.json()
-        print(f"  disk rental:  {d['provider']} up to {d['alloc_gb']} GB")
     for b in [x for x in dash.get("blockers", []) if x.get("node") == node.get("id")]:
         print(_amber("  ! " + b["issue"]) + _dim("  fix: " + b.get("fix", "")))
 
