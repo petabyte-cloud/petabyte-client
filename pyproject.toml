@@ -9,13 +9,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "petabyte-client"
-version = "0.4.0"
+version = "0.4.1"
 description = "Petabyte CLI — rent verified GPU compute, launch apps, and pull AI models from your terminal."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [{ name = "Petabyte, Inc." }]
-keywords = ["gpu", "compute", "cloud", "marketplace", "cli", "ai", "models"]
+keywords = ["gpu", "compute", "cloud", "marketplace", "cli", "ai", "models", "mcp"]
 classifiers = [
     "License :: OSI Approved :: MIT License",
     "Environment :: Console",
@@ -27,6 +27,9 @@ dependencies = ["httpx>=0.24", "rich>=13.0", "tqdm>=4.66"]
 
 [project.optional-dependencies]
 system = ["psutil>=5.9"]
+# MCP server (`petabyte-mcp`). The mcp SDK needs Python 3.12+, so it is opt-in only and never
+# raises the base CLI's 3.9 floor. httpx is already a base dep; pinned >=0.27 here for the SDK.
+mcp = ["mcp>=2.1,<3", "httpx>=0.27", "pydantic>=2.0"]
 
 [project.urls]
 Homepage = "https://petabyte.market"
@@ -35,8 +38,9 @@ Source = "https://github.com/petabyte-cloud/petabyte-client"
 
 [project.scripts]
 petabyte = "petabyte:main"
+petabyte-mcp = "petabyte_mcp.__main__:run"
 
 [tool.setuptools]
 py-modules = ["petabyte"]
-packages = ["petabyte_cli", "modelhub", "modelhub.providers"]
+packages = ["petabyte_cli", "modelhub", "modelhub.providers", "petabyte_mcp"]
 license-files = ["LICENSE"]
