@@ -805,7 +805,7 @@ def cmd_doctor(a, cfg):
     sys.exit(0 if rep.healthy else 1)
 
 
-def cmd_jobs(a, cfg):
+def cmd_instances(a, cfg):
     """Your running instances and recent bookings (buyer view)."""
     _require_product()
     from petabyte_cli import api as _api
@@ -890,6 +890,8 @@ def cmd_agent(a, cfg):
                            foreground=bool(getattr(a, "foreground", False)))
     if what in ("stop", "kill"):
         return _ac.cmd_kill(_ui.out, cfg, yes=yes, force=bool(getattr(a, "force", False)))
+    if what == "mining":
+        return _ac.cmd_mining(getattr(a, "mining_action", "status"))
     if what == "logs":
         return _ac.cmd_logs(_ui.out, cfg, lines=int(getattr(a, "lines", 30) or 30))
     return _ac.cmd_status(_ui.out, cfg, _client, json_mode=JSON)
@@ -1041,7 +1043,7 @@ def _build_parser():
     # product layer: dashboard, doctor, jobs, activity, agent, menu
     sub.add_parser("me", help="your dashboard (same as --me)")
     sub.add_parser("doctor", help="diagnose account, network, Docker, GPU and agent problems")
-    j = sub.add_parser("jobs", help="your running instances and recent bookings")
+    j = sub.add_parser("instances", help="your running VMs and rental history")
     j.add_argument("--limit", type=int, default=10)
     sub.add_parser("activity", help="recent notifications")
     sub.add_parser("menu", help="the guided menu")
@@ -1067,6 +1069,8 @@ def _build_parser():
     ak.add_argument("-y", "--yes", action="store_true", default=_S)
     ak.add_argument("--force", action="store_true", default=_S)
     ags.add_parser("status", help="what the agent is doing right now")
+    am = ags.add_parser("mining", help="optional idle mining: status | enable | disable")
+    am.add_argument("mining_action", nargs="?", default="status", choices=("status", "enable", "disable"))
     al = ags.add_parser("logs", help="follow the agent log")
     al.add_argument("-n", "--lines", type=int, default=30)
 
@@ -1093,7 +1097,7 @@ def _build_parser():
 COMMANDS = {"deposit": cmd_deposit, "login": cmd_login, "wallet": cmd_wallet, "specs": cmd_specs,
             "run": cmd_run, "launch": cmd_launch, "vpn": cmd_vpn, "earnings": cmd_earnings,
             "node": cmd_node, "ask": cmd_ask, "render": cmd_render, "transcode": cmd_transcode,
-            "me": cmd_me, "doctor": cmd_doctor, "jobs": cmd_jobs, "activity": cmd_activity,
+            "me": cmd_me, "doctor": cmd_doctor, "instances": cmd_instances, "activity": cmd_activity,
             "version": cmd_version, "agent": cmd_agent, "ssh": cmd_ssh}
 
 

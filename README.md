@@ -51,7 +51,7 @@ petabyte deposit 20                                   # add funds (test credit i
 petabyte specs                                        # GPUs you can rent right now, cheapest first
 petabyte launch ollama --hours 2                      # one-click app on the cheapest verified GPU
 petabyte run train.ipynb --gpu "RTX 4090" --hours 1   # run a notebook / .py on a rented GPU
-petabyte jobs                                         # what's running, recent bookings
+petabyte instances                                         # what's running, recent bookings
 petabyte ssh                                          # one-time: make this computer able to reach your VMs
 petabyte ssh <vm-id>                                  # then connect
 petabyte ask "explain attention" --model llama3.2     # pay-per-token inference (OpenAI-compatible)

@@ -8,7 +8,7 @@
       1  Rent compute
       2  Find a GPU
       3  Run inference
-      4  Manage my jobs
+      4  Manage my VMs
     SELL
       5  Install the seller agent
       ...
@@ -24,7 +24,7 @@ ITEMS: list[tuple[str, list[tuple[str, list[str]]]]] = [
         # Every entry must DO something on its own — entries that duplicated each other, or
         # that only printed a command's --help, made the menu feel broken.
         ("Find a GPU to rent", ["specs"]),
-        ("Manage my jobs", ["jobs"]),
+        ("Manage my VMs", ["instances"]),
         ("Set up SSH access to my VMs", ["ssh"]),
         ("My wallet", ["wallet"]),
     ]),

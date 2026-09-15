@@ -515,3 +515,21 @@ def cmd_kill(ui, cfg, *, yes: bool = False, force: bool = False, timeout: float 
     if st.backend in ("systemd", "wsl") and st.enabled:
         ui.note(f"The service stays enabled and returns after a reboot; disable with: sudo systemctl disable {A.SERVICE}")
     return 0
+
+
+
+def cmd_mining(action):
+    """Use the installed agent, including Linux agents managed from Windows WSL."""
+    import subprocess
+    import sys
+
+    from . import agent as runtime
+    command = [runtime.INSTALL_DIR + "/.venv/bin/python",
+               runtime.INSTALL_DIR + "/idle_mining.py", action]
+    if sys.platform == "win32":
+        command = ["wsl.exe", "-d", runtime.WSL_DISTRO, "-u", "root", "--", *command]
+    else:
+        command = runtime.privileged(command, interactive=True)
+        if command is None:
+            raise SystemExit("Run with permission to manage the installed seller agent")
+    raise SystemExit(subprocess.call(command))

@@ -38,7 +38,7 @@ GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         ("specs", "GPUs you can rent right now, cheapest first"),
         ("launch <template>", "one-click app (ollama, jupyter, blender…) on the cheapest GPU"),
         ("run <file>", "run a notebook / .py on a rented GPU and print the result"),
-        ("jobs", "your running instances and recent bookings"),
+        ("instances", "your running instances and recent bookings"),
         ("ssh [vm]", "set this computer up to reach your VMs, then connect"),
         ("ask \"<prompt>\"", "pay-per-token inference (OpenAI-compatible)"),
         ("render / transcode", "Blender frames / GPU video transcode"),
