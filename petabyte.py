@@ -466,6 +466,62 @@ def cmd_run(a, cfg):
         print("timed out waiting for result", file=sys.stderr)
 
 
+def _pick_gpu(c):
+    """Interactive GPU chooser for `launch`. Returns a live spec_id to pin, or None to let the
+    server auto-pick the cheapest fit. Live GPUs are numbered + bookable; standby (DigitalOcean
+    capacity provisioned on demand) is shown below, honestly labeled STANDBY — it is informational
+    only (never in the escrow path) and not bookable from the CLI until on-demand provisioning is
+    turned on server-side."""
+    try:
+        r = c.get("/specs")
+        specs = r.json().get("specs", []) if r.status_code == 200 else []
+    except Exception:
+        specs = []
+    standby = []
+    try:                                    # best-effort; standby is a separate, read-only catalogue
+        cr = c.get("/marketplace/catalogue")
+        if cr.status_code == 200:
+            standby = [s for s in cr.json().get("catalogue", []) if s.get("standby")]
+    except Exception:
+        pass
+    if not specs:
+        if standby:
+            print(_dim(f"  no live GPUs to rent right now — {len(standby)} standby (on-demand) GPU "
+                       f"type(s) exist, but on-demand booking isn't enabled yet."))
+        return None                          # nothing to pin; let /launch report capacity
+    print(_bold("Choose a GPU to run on:"))
+    for i, sp in enumerate(specs, 1):
+        loc = sp.get("country") or sp.get("region") or ""
+        tags = [t for t, on in (("confidential", sp.get("confidential")),
+                                 ("region✓", sp.get("region_verified"))) if on]
+        print(f"  {i:>2}) {str(sp.get('gpu_model') or 'CPU'):<24} "
+              f"{_amber('$'+format(sp['price_per_hour'], '.2f')+'/hr')}  "
+              f"{sp['available_units']} unit(s)  {sp.get('provider', '')}  {loc}"
+              + ("  " + " ".join(tags) if tags else ""))
+    if standby:
+        print(_amber("  standby (on-demand DigitalOcean capacity, ~90s to provision "
+                     "— informational, not bookable from the CLI yet):"))
+        seen = set()
+        for s in standby:
+            key = (s.get("gpu_model"), s.get("country"))
+            if key in seen:
+                continue
+            seen.add(key)
+            print(_dim(f"     · {str(s.get('gpu_model')):<24} "
+                       f"${s['price_per_hour']:.2f}/hr  {s.get('country', '')} {s.get('flag', '')}  ")
+                  + _amber("STANDBY"))
+    try:
+        raw = input(f"  pick [1-{len(specs)}, Enter = cheapest]: ").strip()
+    except EOFError:
+        return None
+    if not raw:
+        return specs[0]["spec_id"]
+    if raw.isdigit() and 1 <= int(raw) <= len(specs):
+        return specs[int(raw) - 1]["spec_id"]
+    print(_amber("  not a valid choice — using the cheapest"))
+    return specs[0]["spec_id"]
+
+
 def cmd_launch(a, cfg):
     """Launch a ready-made template (ollama, jupyter, blender, minecraft, …) on the cheapest
     verified GPU that fits — the CLI twin of the web one-click launcher (`POST /launch`)."""
@@ -477,6 +533,13 @@ def cmd_launch(a, cfg):
     if getattr(a, "spec", None):
         body["spec_id"] = str(a.spec)
     with _client(cfg) as c:
+        # If the buyer didn't pin a spec and we're on an interactive terminal, let them choose the
+        # GPU instead of silently auto-picking. Piped/--json/-y stays non-interactive (auto-pick).
+        if (not body.get("spec_id") and not JSON
+                and sys.stdin.isatty() and sys.stdout.isatty()):
+            chosen = _pick_gpu(c)
+            if chosen is not None:
+                body["spec_id"] = str(chosen)
         r = c.post("/launch", json=body)
         if r.status_code != 200:
             _die("launch failed", r)
@@ -899,6 +962,13 @@ def cmd_agent(a, cfg):
 
 def cmd_ssh(a, cfg):
     """`petabyte ssh` — set this computer up to reach your VMs, and connect to one."""
+    # --proxy is the internal ProxyCommand relay used by the managed ~/.ssh/config. It splices the
+    # SSH transport over stdio, so it must run BEFORE anything that could touch stdout and must not
+    # print. Handle it first, before the product gate / any UI.
+    _proxy = getattr(a, "proxy", None)
+    if _proxy:
+        from petabyte_cli import ssh_setup as _S
+        raise SystemExit(_S.run_proxy(_proxy))
     _require_product()
     from petabyte_cli import ssh_cmds as _ssh
     if getattr(a, "status", False):
@@ -1076,6 +1146,9 @@ def _build_parser():
 
     sh = sub.add_parser("ssh", help="set this computer up to reach your VMs (and connect to one)")
     sh.add_argument("vm", nargs="?", help="VM id to connect to (default: set up only)")
+    # Internal: the ProxyCommand in the managed ~/.ssh/config runs `petabyte ssh --proxy <host>` to
+    # relay the connection through the platform gateway. Hidden from --help.
+    sh.add_argument("--proxy", metavar="HOST", help=argparse.SUPPRESS)
     sh.add_argument("--status", action="store_true", help="show what is configured on this machine")
     sh.add_argument("--setup", action="store_true", help="run the setup wizard even if already configured")
     sh.add_argument("--key", help="use this SSH public key (path to a .pub file)")

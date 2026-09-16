@@ -271,6 +271,11 @@ def config_block(zone: str, identity: str | None, user: str = "root") -> str:
              f"    User {user}",
              "    StrictHostKeyChecking accept-new",
              f"    UserKnownHostsFile {kh}",
+             # The VM is not reachable on :22 of its hostname — that name resolves to the platform
+             # gateway, which relays via a line-protocol on :2022 (send the VM hostname, then the
+             # gateway splices to the node hosting it, incl. reverse-tunnel loopback nodes). Route
+             # every VM connection through `petabyte ssh --proxy` so a plain `ssh <id>.<zone>` works.
+             "    ProxyCommand petabyte ssh --proxy %h",
              "    ServerAliveInterval 30",
              "    ServerAliveCountMax 6"]
     if identity:
@@ -466,6 +471,61 @@ def ssh_command(vm_id: str, zone: str, user: str = "root", configured: bool = Tr
              "-o", f"UserKnownHostsFile={os.path.join(ssh_dir(), 'known_hosts_petabyte')}",
              f"{user}@{host}"]
     return argv
+
+
+def run_proxy(host: str, gw_port: int = 2022) -> int:
+    """SSH ProxyCommand relay. `host` (<id>.<zone>) resolves via DNS to the platform gateway; connect
+    the gateway's line-relay port, announce the VM hostname, then splice stdin/stdout <-> the socket.
+    The gateway routes the announced hostname to the node hosting that VM — public node or
+    reverse-tunnel loopback node alike — so a plain `ssh <id>.<zone>` (which can't reach :22 of the
+    hostname directly) works. Returns 0 on clean EOF, 1 on connect error. Never prints to stdout
+    (that stream is the SSH transport)."""
+    import socket, sys, threading
+    try:                                    # Windows: stop CRLF translation on the SSH byte stream,
+        import msvcrt                        # or the console turns \n into \r\n mid-stream and the
+        msvcrt.setmode(0, os.O_BINARY)       # SSH binary transport corrupts (handshake dies at KEX).
+        msvcrt.setmode(1, os.O_BINARY)
+    except Exception:
+        pass
+    try:
+        s = socket.create_connection((host, gw_port), timeout=20)
+    except OSError as e:
+        sys.stderr.write(f"petabyte: could not reach the VM gateway for {host}: {e}\n")
+        return 1
+    try:
+        s.sendall((host + "\n").encode())
+    except OSError as e:
+        sys.stderr.write(f"petabyte: gateway handshake failed for {host}: {e}\n")
+        return 1
+    # The 20s connect timeout stays on the socket; clear it or recv() below raises after 20s idle
+    # and kills an interactive session ("client_loop: send disconnect: Unknown error"). Blocking
+    # splice — SSH's own ServerAliveInterval keepalives keep the tunnel live.
+    s.settimeout(None)
+
+    def _pump_in():
+        try:
+            while True:
+                d = os.read(0, 65536)
+                if not d:
+                    try: s.shutdown(socket.SHUT_WR)
+                    except OSError: pass
+                    return
+                s.sendall(d)
+        except OSError:
+            pass
+    threading.Thread(target=_pump_in, daemon=True).start()
+    try:
+        while True:
+            d = s.recv(65536)
+            if not d:
+                break
+            os.write(1, d)
+    except OSError:
+        pass
+    finally:
+        try: s.close()
+        except OSError: pass
+    return 0
 
 
 def detect(cfg: dict) -> SshState:
