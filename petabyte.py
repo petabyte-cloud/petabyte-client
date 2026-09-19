@@ -14,6 +14,7 @@ sibling `petabyte_cli` package; the classic commands below work without it.
 """
 import argparse
 import json
+import math
 import os
 import os as _os
 import sys
@@ -221,6 +222,19 @@ def _login_web(cfg):
     _die("browser login timed out — run it again")
 
 
+def _finite_float(s):
+    """argparse type for money/price inputs: a FINITE number. Rejects NaN/Infinity here, with an
+    actionable message, instead of letting them reach json.dumps — which emits the non-JSON `NaN`
+    token and blows up as 'Out of range float values are not JSON compliant'."""
+    try:
+        v = float(s)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError(f"'{s}' is not a number")
+    if not math.isfinite(v):
+        raise argparse.ArgumentTypeError("must be a finite number (not NaN or Infinity)")
+    return v
+
+
 def cmd_deposit(a, cfg):
     with _client(cfg) as c:
         r = c.post("/deposit", json={"amount": a.amount})
@@ -229,7 +243,7 @@ def cmd_deposit(a, cfg):
 
 def cmd_wallet(a, cfg):
     with _client(cfg) as c:
-        r = c.get("/wallet")
+        r = c.get("/api/v1/wallet")   # versioned programmatic surface (same handler as /wallet, but the API contract path)
     if r.status_code != 200:
         _die("Could not load your wallet", r)
     w = r.json()
@@ -622,7 +636,7 @@ def cmd_vpn(a, cfg):
 def cmd_earnings(a, cfg):
     """Seller payout state: balance, withdrawable earnings, what's still clearing, recent payouts."""
     with _client(cfg) as c:
-        w = c.get("/wallet")
+        w = c.get("/api/v1/wallet")   # versioned programmatic surface (same handler as /wallet)
         if w.status_code != 200:
             _die("wallet failed", w)
         w = w.json()
@@ -1052,7 +1066,7 @@ def _build_parser():
     s = sub.add_parser("login", help="authorize in the browser (device flow) — no password on "
                                      "the CLI; token also via $PETABYTE_TOKEN")
     s.add_argument("--web", action="store_true", help="(default) browser device-login")
-    s = sub.add_parser("deposit");  s.add_argument("amount", type=float)
+    s = sub.add_parser("deposit");  s.add_argument("amount", type=_finite_float)
     sub.add_parser("wallet")
     sub.add_parser("specs")
     s = sub.add_parser("run", help="run a notebook/.py on a rented GPU, OR start a model runtime")
@@ -1078,7 +1092,7 @@ def _build_parser():
     s.add_argument("template", help="template name, e.g. ollama, jupyter, blender, minecraft, swarm")
     s.add_argument("--hours", type=int, default=2)
     s.add_argument("--region")
-    s.add_argument("--max-price", type=float, dest="max_price", help="cap the $/hour you'll pay")
+    s.add_argument("--max-price", type=_finite_float, dest="max_price", help="cap the $/hour you'll pay")
     s.add_argument("--spec", type=int, help="pin to a specific host spec id")
     # template_params for repo-driven templates (swarm audits the repo; space serves it):
     s.add_argument("--repo", help="git https URL to run (swarm: the repo to audit; space: the app to serve)")
@@ -1127,7 +1141,7 @@ def _build_parser():
     # product layer: dashboard, doctor, jobs, activity, agent, menu
     sub.add_parser("me", help="your dashboard (same as --me)")
     sub.add_parser("doctor", help="diagnose account, network, Docker, GPU and agent problems")
-    j = sub.add_parser("instances", help="your running VMs and rental history")
+    j = sub.add_parser("instances", aliases=["jobs"], help="your running VMs and rental history")
     j.add_argument("--limit", type=int, default=10)
     sub.add_parser("activity", help="recent notifications")
     sub.add_parser("menu", help="the guided menu")
@@ -1184,7 +1198,8 @@ def _build_parser():
 COMMANDS = {"deposit": cmd_deposit, "login": cmd_login, "wallet": cmd_wallet, "specs": cmd_specs,
             "run": cmd_run, "launch": cmd_launch, "vpn": cmd_vpn, "earnings": cmd_earnings,
             "node": cmd_node, "ask": cmd_ask, "render": cmd_render, "transcode": cmd_transcode,
-            "me": cmd_me, "doctor": cmd_doctor, "instances": cmd_instances, "activity": cmd_activity,
+            "me": cmd_me, "doctor": cmd_doctor, "instances": cmd_instances, "jobs": cmd_instances,
+            "activity": cmd_activity,
             "version": cmd_version, "agent": cmd_agent, "ssh": cmd_ssh}
 
 
