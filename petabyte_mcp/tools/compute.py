@@ -9,7 +9,7 @@ Petabyte API has no in-place reboot (see its docstring).
 import uuid
 from typing import Any
 
-from mcp.server.mcpserver import MCPServer
+from mcp.server.fastmcp import FastMCP as MCPServer
 from mcp.types import ToolAnnotations
 
 from ..errors import Codes, ToolFailure, fail

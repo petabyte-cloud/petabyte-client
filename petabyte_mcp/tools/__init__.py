@@ -1,6 +1,6 @@
 """Tool registration. Each module exposes `register(server, runtime)`."""
 
-from mcp.server.mcpserver import MCPServer
+from mcp.server.fastmcp import FastMCP as MCPServer
 
 from ..runtime import Runtime
 from . import account, compute, marketplace

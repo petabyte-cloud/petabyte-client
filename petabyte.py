@@ -532,6 +532,13 @@ def cmd_launch(a, cfg):
         body["region"] = a.region
     if getattr(a, "spec", None):
         body["spec_id"] = str(a.spec)
+    # repo-driven templates (swarm/space) carry their config in template_params; the server validates.
+    tp = {k: getattr(a, k) for k in ("repo", "ref", "job", "model", "agents", "max_files")
+          if getattr(a, k, None) not in (None, "")}
+    if tp:
+        body["template_params"] = tp
+    if a.template == "swarm" and "repo" not in tp:
+        _die("swarm needs --repo (the https git repo to audit)", None)
     with _client(cfg) as c:
         # If the buyer didn't pin a spec and we're on an interactive terminal, let them choose the
         # GPU instead of silently auto-picking. Piped/--json/-y stays non-interactive (auto-pick).
@@ -1068,11 +1075,18 @@ def _build_parser():
     s.add_argument("--force", action="store_true", help="model runtime: re-pull even if already cached")
     s = sub.add_parser("launch",
                        help="launch a ready-made template (ollama, jupyter, blender, minecraft…) on the cheapest verified GPU")
-    s.add_argument("template", help="template name, e.g. ollama, jupyter, blender, minecraft")
+    s.add_argument("template", help="template name, e.g. ollama, jupyter, blender, minecraft, swarm")
     s.add_argument("--hours", type=int, default=2)
     s.add_argument("--region")
     s.add_argument("--max-price", type=float, dest="max_price", help="cap the $/hour you'll pay")
     s.add_argument("--spec", type=int, help="pin to a specific host spec id")
+    # template_params for repo-driven templates (swarm audits the repo; space serves it):
+    s.add_argument("--repo", help="git https URL to run (swarm: the repo to audit; space: the app to serve)")
+    s.add_argument("--ref", help="branch / tag / commit of --repo")
+    s.add_argument("--job", choices=["cosmos", "generic"], help="swarm job profile (default cosmos)")
+    s.add_argument("--model", help="swarm: HuggingFace model id for the vLLM backend")
+    s.add_argument("--agents", type=int, help="swarm: number of agents (1-16)")
+    s.add_argument("--max-files", type=int, dest="max_files", help="swarm: cap files audited (1-2000)")
     s = sub.add_parser("vpn", help="download the WireGuard config for a VPN booking")
     s.add_argument("booking_id", type=int); s.add_argument("-o", "--out")
     s = sub.add_parser("ask", help="send a prompt to the pay-per-token Inference API and print the answer")

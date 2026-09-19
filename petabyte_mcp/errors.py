@@ -13,7 +13,7 @@ import json
 from collections.abc import Mapping
 from typing import Any, NoReturn
 
-from mcp.server.mcpserver.exceptions import ToolError
+from mcp.server.fastmcp.exceptions import ToolError
 
 
 class Codes:

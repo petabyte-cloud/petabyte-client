@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from mcp.server.mcpserver import MCPServer
+from mcp.server.fastmcp import FastMCP as MCPServer
 from mcp.types import ToolAnnotations
 
 from ..runtime import Runtime

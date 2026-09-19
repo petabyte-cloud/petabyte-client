@@ -12,7 +12,12 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import httpx
-from mcp.server.mcpserver import MCPServer
+# The published SDK is mcp 1.x, whose high-level server class is FastMCP; there is no
+# `mcp.server.mcpserver` module and no mcp 2.x on PyPI, so this import raised ImportError and
+# `petabyte-mcp` exited 2 before any client could connect. FastMCP takes the same
+# name/instructions/lifespan and the same .tool(name, title, annotations) decorator the tool
+# modules already use, so only the wiring below changes.
+from mcp.server.fastmcp import FastMCP as MCPServer
 
 from . import __version__
 from .api_client import PetabyteClient
@@ -91,8 +96,11 @@ def build_server(
             await rt.aclose()
             rt.log.info("server.stop")
 
+    # FastMCP takes no `version`, and host/port are constructor args (run() takes only the
+    # transport), so the HTTP listener is configured here rather than at run time.
     server = MCPServer(
-        name=settings.server_name, version=__version__, instructions=INSTRUCTIONS, lifespan=lifespan
+        name=settings.server_name, instructions=INSTRUCTIONS, lifespan=lifespan,
+        host=settings.host, port=settings.port,
     )
     register_all(server, rt)
     server.petabyte_runtime = rt  # type: ignore[attr-defined]  # handy for tests/diagnostics
@@ -113,6 +121,6 @@ def main() -> None:
     server = build_server(settings)
     if settings.transport == "streamable-http":
         log.info("transport.http", extra={"host": settings.host, "port": settings.port})
-        server.run(transport="streamable-http", host=settings.host, port=settings.port)
+        server.run(transport="streamable-http")
     else:
         server.run(transport="stdio")
