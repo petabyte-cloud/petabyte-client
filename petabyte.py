@@ -549,10 +549,35 @@ def cmd_launch(a, cfg):
     # repo-driven templates (swarm/space) carry their config in template_params; the server validates.
     tp = {k: getattr(a, k) for k in ("repo", "ref", "job", "model", "agents", "max_files")
           if getattr(a, k, None) not in (None, "")}
+    source_path = getattr(a, "python_file", None)
+    python_options = (getattr(a, "script_args", None), getattr(a, "image", None),
+                      getattr(a, "timeout", None), getattr(a, "cpu_only", False),
+                      getattr(a, "min_vram", None))
+    if source_path:
+        if a.template != "swarm" or tp:
+            _die("--python is for swarm and cannot be combined with audit options", None)
+        try:
+            with open(source_path, "rb") as f:
+                raw = f.read(65537)
+            if len(raw) > 65536:
+                raise ValueError("Python source must be at most 64 KiB")
+            source = raw.decode("utf-8")
+            if not source.strip() or "\0" in source:
+                raise ValueError("Python source must be nonempty and contain no NUL bytes")
+        except (OSError, ValueError) as e:
+            _die(str(e), None)
+        tp = {"mode": "python", "code": source, "args": getattr(a, "script_args", None) or [],
+              "gpu": not getattr(a, "cpu_only", False)}
+        for flag, key in (("image", "image"), ("timeout", "max_runtime_s"), ("min_vram", "min_vram")):
+            if getattr(a, flag, None) is not None:
+                tp[key] = getattr(a, flag)
+        body["mode"] = "batch"
+    elif any(value is not None and value is not False for value in python_options):
+        _die("Python job options require --python FILE", None)
     if tp:
         body["template_params"] = tp
-    if a.template == "swarm" and "repo" not in tp:
-        _die("swarm needs --repo (the https git repo to audit)", None)
+    if a.template == "swarm" and "repo" not in tp and not source_path:
+        _die("swarm needs --repo to audit, or --python FILE to execute", None)
     with _client(cfg) as c:
         # If the buyer didn't pin a spec and we're on an interactive terminal, let them choose the
         # GPU instead of silently auto-picking. Piped/--json/-y stays non-interactive (auto-pick).
@@ -568,6 +593,8 @@ def cmd_launch(a, cfg):
         print(_green("✓ launched ") + _bold(a.template) +
               _dim(f"  · {d.get('gpu_model', '?')} @ ${d.get('price_per_hour', '?')}/hr · {a.hours}h"))
         print(f"  booking #{d.get('booking_id')}   escrow ${d.get('gross_amount')}")
+        if d.get("result_url"):
+            print(f"  task #{d.get('task_id')}   results {d['result_url']}")
         if d.get("routing_explanation"):
             print("  " + _dim(d["routing_explanation"]))
         url = d.get("url")
@@ -1101,6 +1128,12 @@ def _build_parser():
     s.add_argument("--model", help="swarm: HuggingFace model id for the vLLM backend")
     s.add_argument("--agents", type=int, help="swarm: number of agents (1-16)")
     s.add_argument("--max-files", type=int, dest="max_files", help="swarm: cap files audited (1-2000)")
+    s.add_argument("--python", dest="python_file", metavar="FILE", help="swarm: execute a UTF-8 Python file as a batch job")
+    s.add_argument("--script-arg", dest="script_args", action="append", help="Python script argument; repeat, or use --script-arg=--flag")
+    s.add_argument("--image", help="Python job: dependency image with python3 (default pinned Swarm image)")
+    s.add_argument("--timeout", type=int, help="Python job: seconds, 1..86400 (default 300; capped by paid time)")
+    s.add_argument("--cpu-only", action="store_true", help="Python job: do not request GPU access")
+    s.add_argument("--min-vram", type=int, help="Python job: minimum GPU memory in GB")
     s = sub.add_parser("vpn", help="download the WireGuard config for a VPN booking")
     s.add_argument("booking_id", type=int); s.add_argument("-o", "--out")
     s = sub.add_parser("ask", help="send a prompt to the pay-per-token Inference API and print the answer")
