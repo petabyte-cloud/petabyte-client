@@ -10,7 +10,7 @@ from ..shaping import shape_account, shape_balance, shape_bookings, shape_usage
 from ..validation import BookingsLimit
 
 _READ = ToolAnnotations(
-    read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=True
+    readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True
 )
 
 

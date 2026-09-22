@@ -22,7 +22,7 @@ from ..validation import (
 )
 
 _READ = ToolAnnotations(
-    read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=True
+    readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True
 )
 
 

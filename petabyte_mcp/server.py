@@ -100,8 +100,11 @@ def build_server(
     # FastMCP takes no `version`, and host/port are constructor args (run() takes only the
     # transport), so the HTTP listener is configured here rather than at run time.
     server = MCPServer(
-        name=settings.server_name, instructions=INSTRUCTIONS, lifespan=lifespan,
-        host=settings.host, port=settings.port,
+        name=settings.server_name,
+        instructions=INSTRUCTIONS,
+        lifespan=lifespan,
+        host=settings.host,
+        port=settings.port,
     )
     register_all(server, rt)
     server.petabyte_runtime = rt  # type: ignore[attr-defined]  # handy for tests/diagnostics

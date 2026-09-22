@@ -36,16 +36,16 @@ from ..validation import (
 )
 
 _READ = ToolAnnotations(
-    read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=True
+    readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True
 )
 _MONEY = ToolAnnotations(
-    read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=True
+    readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True
 )
 _DESTRUCTIVE = ToolAnnotations(
-    read_only_hint=False, destructive_hint=True, idempotent_hint=False, open_world_hint=True
+    readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True
 )
 _DESTRUCTIVE_IDEMPOTENT = ToolAnnotations(
-    read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=True
+    readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=True
 )
 
 _STOP_EFFECT = (
