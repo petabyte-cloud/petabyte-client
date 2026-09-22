@@ -12,6 +12,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import httpx
+
 # The published SDK is mcp 1.x, whose high-level server class is FastMCP; there is no
 # `mcp.server.mcpserver` module and no mcp 2.x on PyPI, so this import raised ImportError and
 # `petabyte-mcp` exited 2 before any client could connect. FastMCP takes the same
