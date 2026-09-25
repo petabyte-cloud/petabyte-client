@@ -5,7 +5,8 @@ sets up today:
 
   Linux    a root-installed systemd service `petabyte-agent` (/opt/petabyte-agent, venv,
            EnvironmentFile /etc/petabyte/agent.env, Restart=always);
-  Windows  the SAME service inside the Ubuntu-24.04 WSL2 distro that install.ps1 bootstraps,
+  Windows  the SAME service inside the WSL2 distro that install.ps1 bootstraps ("Petabyte", its
+           own; "Ubuntu-24.04" on older installs — read from its install-state.json),
            driven with `wsl.exe -d <distro> -u root -- systemctl …` (exactly what manage.ps1 does);
   dev      a source checkout run in the foreground (`python main.py`) — used only when there is
            no service manager at all (a laptop without systemd, macOS).
@@ -39,7 +40,18 @@ INSTALL_DIR = "/opt/petabyte-agent"
 ENV_FILE = "/etc/petabyte/agent.env"
 SERVICE = "petabyte-agent"
 UNIT_FILE = f"/etc/systemd/system/{SERVICE}.service"
-WSL_DISTRO = os.getenv("PETABYTE_WSL_DISTRO", "Ubuntu-24.04")
+def _installed_distro() -> str:
+    """The distro install.ps1 recorded: its own "Petabyte", or "Ubuntu-24.04" on older installs."""
+    try:
+        import json
+        path = os.path.join(os.getenv("ProgramData") or r"C:\ProgramData", "Petabyte", "install-state.json")
+        with open(path, encoding="utf-8-sig") as f:
+            return str(json.load(f)["distro"])
+    except Exception:  # noqa: BLE001 — no state file (not installed yet / not Windows)
+        return "Ubuntu-24.04"
+
+
+WSL_DISTRO = os.getenv("PETABYTE_WSL_DISTRO") or _installed_distro()
 LOCAL_STATUS_URL = os.getenv("PETABYTE_AGENT_STATUS_URL", "http://127.0.0.1:5000/api/status")
 # ANCHORED match on the exact container names the agent creates (lumaris_agent/task_fetcher.py
 # and vm.py). A bare "pb-" PREFIX matched anything merely starting with it -- pb-postgres,
@@ -489,10 +501,12 @@ class InstallPlan:
 def installer_summary(plan: InstallPlan) -> list[str]:
     """What the official installer will do, in plain words (it IS privileged)."""
     if plan.installer_name == "install.ps1":
-        return ["Enable WSL2 and install the Ubuntu-24.04 distro if missing (Windows feature — may need a reboot)",
+        return ["Enable WSL2 and create the agent's own \"Petabyte\" distro (Ubuntu 24.04) if missing "
+                "(Windows feature — may need a reboot); Docker Desktop is left as it is",
                 "Inside it, run the Linux installer below and register a login task that keeps the node alive"]
     return ["Install python3, git, curl and rsync with apt (if missing)",
-            "Install Docker (get.docker.com) if it is not installed — buyer jobs run in sandboxed containers",
+            "Install or enable the native Docker Engine if needed (never Docker Desktop) — buyer jobs "
+            "run in sandboxed containers, each app on its own firewalled network",
             "Install the NVIDIA container toolkit when an NVIDIA GPU is present",
             "Restrict container egress to the internet only (iptables) — turn off with --no-egress-lockdown",
             f"Install the agent to {INSTALL_DIR} with its own venv, write {ENV_FILE} (root-only, 0600)",

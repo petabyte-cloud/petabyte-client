@@ -39,7 +39,7 @@ Later: `petabyte --kill-agent` stops the agent safely (it warns if a job is runn
 `petabyte node status <id>` show the money and the node.
 
 - Linux: the agent is the `petabyte-agent` systemd service under `/opt/petabyte-agent`.
-- Windows: the same service inside the Ubuntu-24.04 WSL2 distro the installer sets up
+- Windows: the same service inside the agent's own `Petabyte` WSL2 distro the installer sets up
   (run the install from an **Administrator** PowerShell).
 - macOS: the seller agent is not supported yet; buying works everywhere.
 
