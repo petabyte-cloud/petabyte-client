@@ -10,7 +10,7 @@ PETABYTE_REGISTRY_URL without changing callers.
 """
 import os
 
-from .base import ModelProvider, SearchResult, get_json
+from .base import ModelProvider, ProviderError, SearchResult, get_json
 from .huggingface import HuggingFaceProvider
 from .http import HttpProvider
 
@@ -54,7 +54,14 @@ class PetabyteRegistryProvider(ModelProvider):
         key = f"{ref.name}:{ref.tag}" if ref.tag else ref.name
         target = self.aliases.get(key) or self.aliases.get(ref.name)
         if not target:
-            raise KeyError(f"unknown Petabyte alias {key!r}")
+            # ProviderError, NOT a bare KeyError: "the user typed a name we don't have" is a
+            # request error, and every caller (models_routes, the CLI) handles the provider
+            # abstraction's own error type. A KeyError escapes those handlers, so FastAPI turned
+            # a typo into a 500 "Internal server error" — the same wrong-status/Sentry-noise
+            # problem the 403s in models_routes.api_pull were written to avoid.
+            raise ProviderError(
+                f"unknown Petabyte alias {key!r} — see GET /api/models/search?source=pt "
+                "for the curated aliases, or use a full 'publisher/model' Hugging Face id")
         source, upstream_id = target
         up = parse(upstream_id, default_source=source)
         if ref.revision:
