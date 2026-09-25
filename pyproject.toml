@@ -14,7 +14,7 @@ description = "Petabyte CLI — rent verified GPU compute, launch apps, and pull
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
-authors = [{ name = "Petabyte, Inc." }]
+authors = [{ name = "Petabyte Cloud, Inc." }]
 keywords = ["gpu", "compute", "cloud", "marketplace", "cli", "ai", "models", "mcp"]
 classifiers = [
     "License :: OSI Approved :: MIT License",

@@ -1,6 +1,6 @@
 MIT License
 
-Copyright (c) 2026 Petabyte, Inc.
+Copyright (c) 2026 Petabyte Cloud, Inc.
 
 This license covers ONLY the `petabyte-client` distribution — the `petabyte` CLI
 module and the bundled `modelhub` package that ship in that wheel. The rest of the
