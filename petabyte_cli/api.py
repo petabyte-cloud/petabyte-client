@@ -155,7 +155,7 @@ def fetch_dashboard(client, *, api_url: str = "", max_forecasts: int = 3,
     d = Dashboard()
     d.me = fetch_me(client, api_url)
     jobs: dict[str, Callable[[], Piece]] = {
-        "wallet": lambda: _get(client, "/wallet"),
+        "wallet": lambda: _get(client, "/api/v1/wallet"),
         "spend": lambda: _get(client, "/buyer/spend"),
         "vms": lambda: _get(client, "/vms"),
         "clusters": lambda: _get(client, "/clusters"),

@@ -20,7 +20,7 @@ def register(server: MCPServer, rt: Runtime) -> None:
         """The caller's wallet: spendable balance, seller earnings, what is withdrawable vs
         still clearing. Requires scope wallets:read (the legacy 'read' scope grants it)."""
         await rt.authz.authorize("get_balance")
-        return shape_balance(await rt.get("/wallet"))
+        return shape_balance(await rt.get("/api/v1/wallet"))
 
     @server.tool(name="get_usage", title="Current spend / burn rate", annotations=_READ)
     async def get_usage() -> dict[str, Any]:

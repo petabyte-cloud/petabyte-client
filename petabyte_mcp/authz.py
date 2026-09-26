@@ -68,7 +68,7 @@ TOOL_POLICIES: dict[str, ToolPolicy] = {
         ),
         _read("get_usage", "compute:read", "GET /buyer/spend"),
         # -- billing / account reads --
-        _read("get_balance", "wallets:read", "GET /wallet"),
+        _read("get_balance", "wallets:read", "GET /api/v1/wallet"),
         _read("get_account", "users:read", "GET /me", "GET /verify_api_key"),
         _read("list_bookings", "escrow:read", "GET /account/bookings"),
         # -- compute actions (compute:write) --
