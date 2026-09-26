@@ -812,39 +812,43 @@ def _download_outputs(c, job_id, outdir):
     if r.status_code >= 300:
         _die("could not list outputs", r)
     outs = r.json().get("outputs", [])
+    if not outs:
+        _die("job has no downloadable outputs")
     os.makedirs(outdir, exist_ok=True)
     saved = []
     for o in outs:
         name = (o.get("output_ref", "").rstrip("/").split("/")[-1]) or f"seg{o.get('idx')}"
         d = httpx.get(o["download_url"], timeout=1800)
-        if d.status_code < 300:
-            dst = os.path.join(outdir, name)
-            with open(dst, "wb") as fh:
-                fh.write(d.content)
-            saved.append(dst)
+        if d.status_code >= 300:
+            _die(f"output download failed ({d.status_code}); job #{job_id}")
+        dst = os.path.join(outdir, name)
+        with open(dst, "wb") as fh:
+            fh.write(d.content)
+        saved.append(dst)
     return saved
 
 
 def cmd_render(a, cfg):
-    """Drop a .blend, render on the farm, pay only for render time, download the frames."""
+    """Drop a .blend, choose the render target, and download the frame archives."""
     fs, fe = _parse_frames(a.frames)
     with _client(cfg) as c:
         ref = _upload_input(c, a.file)
         r = c.post("/render", json={"blend_ref": ref, "frame_start": fs, "frame_end": fe,
-                                    "samples": a.samples, "nodes": a.nodes, "hours": a.hours})
+                                    "samples": a.samples, "nodes": a.nodes, "hours": a.hours,
+                                    "gpu_class": a.gpu_class, "engine": a.engine,
+                                    "blender_version": a.blender_version})
         if r.status_code >= 300:
             _die("render request failed", r)
         d = r.json()
         print(_green("✓ render started  ")
               + f"job #{d['job_id']} · {d['nodes']} node(s) · frames {fs}-{fe}")
         print("  " + _bold(f"~${d.get('estimated_cost')}")
-              + _dim(" max — you're billed only for actual render time"))
+              + _dim(" maximum escrow — settlement follows the booking terms"))
         m = _poll_job(c, d["job_id"], "render")
         if str(m.get("status", "")).lower() in _JOB_FAILED:
-            _die("render job failed")
+            _die("render job failed: " + str(m.get("failure_reason") or "see the task review"))
         saved = _download_outputs(c, d["job_id"], a.out)
-        print(_green(f"✓ {len(saved)} frame(s) → {a.out}") if saved
-              else _amber("job finished but no outputs were ready — re-run to fetch later"))
+        print(_green(f"✓ {len(saved)} frame archive(s) → {a.out}"))
 
 
 def cmd_transcode(a, cfg):
@@ -1155,12 +1159,15 @@ def _build_parser():
                        help="scan the local ~/.petabyte cache and report it to the marketplace")
     sm.add_argument("spec_id", type=int)
 
-    s = sub.add_parser("render", help="render a .blend on the GPU farm — pay only for render time")
+    s = sub.add_parser("render", help="render a .blend on the GPU farm and download the frames")
     s.add_argument("file", help="path to a .blend scene")
     s.add_argument("--frames", default="1-1", help="frame range, e.g. 1-120 or 5")
     s.add_argument("--samples", type=int, default=128)
     s.add_argument("--nodes", type=int, default=1, help="split the frame range across N nodes")
-    s.add_argument("--hours", type=int, default=1, help="max hours to escrow (unused is refunded)")
+    s.add_argument("--hours", type=int, default=1, help="hours to escrow under the booking terms")
+    s.add_argument("--gpu-class", help="GPU model filter, e.g. NVIDIA GeForce RTX 5070 Ti Laptop GPU")
+    s.add_argument("--engine", choices=("auto", "CYCLES", "BLENDER_RENDER"), default="auto")
+    s.add_argument("--blender-version", choices=("latest", "2.79"), default="latest")
     s.add_argument("--out", default="./renders", help="download frames here")
 
     s = sub.add_parser("transcode", help="GPU-transcode a video (NVENC) — drop a file, get it back")
