@@ -540,6 +540,10 @@ def cmd_launch(a, cfg):
     """Launch a ready-made template (ollama, jupyter, blender, minecraft, …) on the cheapest
     verified GPU that fits — the CLI twin of the web one-click launcher (`POST /launch`)."""
     body = {"template": a.template, "hours": a.hours}
+    if getattr(a, "cached_image_only", False):
+        body["cached_image_only"] = True
+    if getattr(a, "max_startup_seconds", None) is not None:
+        body["max_startup_seconds"] = a.max_startup_seconds
     if getattr(a, "max_price", None) is not None:
         body["max_price_per_hour"] = a.max_price
     if getattr(a, "region", None):
@@ -1156,7 +1160,9 @@ def _build_parser():
     s.add_argument("--repo", help="git https URL to run (swarm: the repo to audit; space: the app to serve)")
     s.add_argument("--ref", help="branch / tag / commit of --repo")
     s.add_argument("--job", choices=["cosmos", "generic"], help="swarm job profile (default cosmos)")
-    s.add_argument("--model", help="swarm: HuggingFace model id for the vLLM backend")
+    s.add_argument("--cached-image-only", action="store_true", help="refuse hosts needing a Docker image download")
+    s.add_argument("--max-startup-seconds", type=int, help="app startup deadline, 30..3600 seconds (default 900)")
+    s.add_argument("--model", help="Model id (Ollama: qwen2.5:0.5b; vLLM/swarm: Hugging Face id)")
     s.add_argument("--agents", type=int, help="swarm: number of agents (1-16)")
     s.add_argument("--max-files", type=int, dest="max_files", help="swarm: cap files audited (1-2000)")
     s.add_argument("--python", dest="python_file", metavar="FILE", help="swarm: execute a UTF-8 Python file as a batch job")
