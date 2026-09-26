@@ -155,6 +155,8 @@ def register(server: MCPServer, rt: Runtime) -> None:
             if offer_id:
                 facts["offer_id"] = facts.pop("spec_id")
             est_body: dict[str, Any] = {"template": template, "hours": min(hours, 720)}
+            if params is not None:
+                est_body["template_params"] = params
             if offer_id:
                 est_body["spec_id"] = offer_id
             try:
