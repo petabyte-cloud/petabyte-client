@@ -759,7 +759,7 @@ def cmd_node(a, cfg):
     {"status": _node_status, "sync-models": _node_sync_models}[a.node_cmd](a, cfg)
 
 
-_JOB_DONE = {"complete", "done", "ok", "stitched", "succeeded"}
+_JOB_DONE = {"complete", "completed", "done", "ok", "stitched", "succeeded"}
 _JOB_FAILED = {"failed", "error", "cancelled"}
 
 
@@ -789,10 +789,27 @@ def _upload_input(c, path):
 
 def _poll_job(c, job_id, label):
     seen = None
+    failures = 0
+    def retry():
+        nonlocal failures
+        failures += 1
+        if failures > 5:
+            _die(f"could not monitor job #{job_id}; it may still be running. "
+                 f"Resume without booking again: petabyte download {job_id} --out <directory>")
+        print(f"  job #{job_id}: temporary status error; retry {failures}/5", file=sys.stderr)
+        time.sleep(min(2 ** failures, 30))
     while True:
-        r = c.get(f"/jobs/manifest/{job_id}")
+        try:
+            r = c.get(f"/jobs/manifest/{job_id}")
+        except httpx.TransportError:
+            retry()
+            continue
+        if r.status_code in (429, 502, 503, 504):
+            retry()
+            continue
         if r.status_code >= 300:
             _die("could not read job status", r)
+        failures = 0
         m = r.json()
         segs = m.get("segments", [])
         done = sum(1 for x in segs if str(x.get("status", "")).lower() in _JOB_DONE)
@@ -802,7 +819,7 @@ def _poll_job(c, job_id, label):
             print(f"  {label}: {done}/{tot} segment(s) — {m.get('status')}")
             seen = key
         st = str(m.get("status", "")).lower()
-        if st in _JOB_DONE or st in _JOB_FAILED or (tot and done >= tot):
+        if st in _JOB_DONE or st in _JOB_FAILED:
             return m
         time.sleep(4)
 
@@ -849,6 +866,16 @@ def cmd_render(a, cfg):
             _die("render job failed: " + str(m.get("failure_reason") or "see the task review"))
         saved = _download_outputs(c, d["job_id"], a.out)
         print(_green(f"✓ {len(saved)} frame archive(s) → {a.out}"))
+
+
+def cmd_download(a, cfg):
+    """Resume monitoring/downloading an existing owned job; never submit or book."""
+    with _client(cfg) as c:
+        m = _poll_job(c, a.job_id, "job")
+        if str(m.get("status", "")).lower() in _JOB_FAILED:
+            _die("job failed: " + str(m.get("failure_reason") or "see the task review"))
+        saved = _download_outputs(c, a.job_id, a.out)
+        print(_green(f"✓ {len(saved)} output archive(s) → {a.out}"))
 
 
 def cmd_transcode(a, cfg):
@@ -1170,6 +1197,10 @@ def _build_parser():
     s.add_argument("--blender-version", choices=("latest", "2.79"), default="latest")
     s.add_argument("--out", default="./renders", help="download frames here")
 
+    s = sub.add_parser("download", help="wait for and download an existing job; no new booking")
+    s.add_argument("job_id", type=int, help="owned render or transcode job ID")
+    s.add_argument("--out", default="./outputs", help="download output here")
+
     s = sub.add_parser("transcode", help="GPU-transcode a video (NVENC) — drop a file, get it back")
     s.add_argument("file", help="path to a source video")
     s.add_argument("--codec", default="h264", help="h264|h265|av1|vp9")
@@ -1238,6 +1269,7 @@ def _build_parser():
 COMMANDS = {"deposit": cmd_deposit, "login": cmd_login, "wallet": cmd_wallet, "specs": cmd_specs,
             "run": cmd_run, "launch": cmd_launch, "vpn": cmd_vpn, "earnings": cmd_earnings,
             "node": cmd_node, "ask": cmd_ask, "render": cmd_render, "transcode": cmd_transcode,
+            "download": cmd_download,
             "me": cmd_me, "doctor": cmd_doctor, "instances": cmd_instances, "jobs": cmd_instances,
             "activity": cmd_activity,
             "version": cmd_version, "agent": cmd_agent, "ssh": cmd_ssh}
