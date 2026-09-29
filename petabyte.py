@@ -536,6 +536,17 @@ def _pick_gpu(c):
     return specs[0]["spec_id"]
 
 
+def _public_port(value):
+    try:
+        number, protocol = value.split("/")
+        port = int(number)
+        if not 1 <= port <= 65535 or protocol not in ("tcp", "udp"):
+            raise ValueError()
+        return {"port": port, "protocol": protocol}
+    except ValueError:
+        raise argparse.ArgumentTypeError("use PORT/tcp or PORT/udp, with PORT in 1..65535") from None
+
+
 def cmd_launch(a, cfg):
     """Launch a ready-made template (ollama, jupyter, blender, minecraft, …) on the cheapest
     verified GPU that fits — the CLI twin of the web one-click launcher (`POST /launch`)."""
@@ -553,6 +564,8 @@ def cmd_launch(a, cfg):
     # repo-driven templates (swarm/space) carry their config in template_params; the server validates.
     tp = {k: getattr(a, k) for k in ("repo", "ref", "job", "model", "agents", "max_files")
           if getattr(a, k, None) not in (None, "")}
+    if getattr(a, "public_port", None):
+        tp["public_ports"] = a.public_port
     source_path = getattr(a, "python_file", None)
     python_options = (getattr(a, "script_args", None), getattr(a, "image", None),
                       getattr(a, "timeout", None), getattr(a, "cpu_only", False),
@@ -607,6 +620,12 @@ def cmd_launch(a, cfg):
             print("  address  " + _cyan(addr))
         if isinstance(url, dict) and url.get("ssh"):
             print("  ssh      " + _dim(url["ssh"]))
+        if isinstance(url, dict):
+            for service in url.get("ports", []):
+                print(f"  {service['protocol']} {service['container_port']} → {service['address']}")
+            if url.get("login"):
+                print(f"  desktop login  {url['login']['username']}")
+                print(f"  password       {url['login']['password']}")
         if d.get("connect"):
             print("  " + _dim(d["connect"]))
 
@@ -1163,6 +1182,8 @@ def _build_parser():
     s.add_argument("--cached-image-only", action="store_true", help="refuse hosts needing a Docker image download")
     s.add_argument("--max-startup-seconds", type=int, help="app startup deadline, 30..3600 seconds (default 900)")
     s.add_argument("--model", help="Model id (Ollama: qwen2.5:0.5b; vLLM/swarm: Hugging Face id)")
+    s.add_argument("--public-port", type=_public_port, action="append", metavar="PORT/tcp|udp",
+                   help="publish a container service through its allocated gateway port; repeat up to 32 services")
     s.add_argument("--agents", type=int, help="swarm: number of agents (1-16)")
     s.add_argument("--max-files", type=int, dest="max_files", help="swarm: cap files audited (1-2000)")
     s.add_argument("--python", dest="python_file", metavar="FILE", help="swarm: execute a UTF-8 Python file as a batch job")

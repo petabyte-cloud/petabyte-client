@@ -58,7 +58,17 @@ _INSTANCE_FIELDS = (
     "migrations",
     "created_at",
 )
-_INSTANCE_URL_FIELDS = ("hostname", "http", "ssh", "default_user")
+_INSTANCE_URL_FIELDS = ("hostname", "http", "ssh", "game_server", "default_user")
+
+
+def _instance_url(raw: Mapping[str, Any]) -> dict[str, Any]:
+    out = _pick(raw, _INSTANCE_URL_FIELDS)
+    if isinstance(raw.get("ports"), list):
+        out["ports"] = [_pick(item, ("container_port", "protocol", "public_port", "hostname", "address"))
+                        for item in raw["ports"][:32] if isinstance(item, Mapping)]
+    if isinstance(raw.get("login"), Mapping):
+        out["login"] = _pick(raw["login"], ("username", "password"))
+    return out
 _EVENT_FIELDS = ("event", "detail", "at")
 _USAGE_FIELDS = (
     "balance",
@@ -104,7 +114,7 @@ _ESTIMATE_FIELDS = (
     "cloud_comparison",
     "notes",
 )
-_TEMPLATE_FIELDS = ("name", "desc", "port", "gpu", "min_vram", "kind", "stateful")
+_TEMPLATE_FIELDS = ("name", "desc", "port", "gpu", "min_vram", "kind", "stateful", "launchable", "unavailable_reason")
 _LAUNCH_FIELDS = (
     "booking_id",
     "task_id",
@@ -146,7 +156,7 @@ def shape_instance(raw: Mapping[str, Any]) -> dict[str, Any]:
         out["instance_id"] = raw["vm_id"]
     out.update(_pick(raw, _INSTANCE_FIELDS))
     if isinstance(raw.get("url"), Mapping):
-        out["url"] = _pick(raw["url"], _INSTANCE_URL_FIELDS)
+        out["url"] = _instance_url(raw["url"])
     if raw.get("note"):
         out["note"] = raw["note"]
     return out
@@ -201,5 +211,5 @@ def shape_launch(raw: Mapping[str, Any]) -> dict[str, Any]:
         out["instance_id"] = raw["vm_id"]
     out.update(_pick(raw, _LAUNCH_FIELDS))
     if isinstance(raw.get("url"), Mapping):
-        out["url"] = _pick(raw["url"], _INSTANCE_URL_FIELDS)
+        out["url"] = _instance_url(raw["url"])
     return out
