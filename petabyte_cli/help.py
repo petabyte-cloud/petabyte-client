@@ -35,8 +35,8 @@ GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         ("node status <id>", "one of your nodes in detail"),
     ]),
     ("BUYER", [
-        ("specs", "GPUs you can rent right now, cheapest first"),
-        ("launch <template>", "one-click app (ollama, jupyter, blender…) on the cheapest GPU"),
+        ("specs", "available GPUs and their IDs for launch --spec"),
+        ("launch <template>", "choose a GPU interactively, or pin one with --spec ID"),
         ("run <file>", "run a notebook / .py on a rented GPU and print the result"),
         ("instances", "your running instances and recent bookings"),
         ("ssh [vm]", "set this computer up to reach your VMs, then connect"),

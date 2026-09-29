@@ -48,14 +48,25 @@ Later: `petabyte --kill-agent` stops the agent safely (it warns if a job is runn
 ```bash
 petabyte login
 petabyte deposit 20                                   # add funds (test credit in the sandbox)
-petabyte specs                                        # GPUs you can rent right now, cheapest first
-petabyte launch ollama --hours 2                      # one-click app on the cheapest verified GPU
+petabyte specs                                        # available GPUs; use the ID column with --spec
+petabyte launch ollama --hours 2                      # choose a GPU from the interactive picker
 petabyte run train.ipynb --gpu "RTX 4090" --hours 1   # run a notebook / .py on a rented GPU
 petabyte instances                                         # what's running, recent bookings
 petabyte ssh                                          # one-time: make this computer able to reach your VMs
 petabyte ssh <vm-id>                                  # then connect
 petabyte ask "explain attention" --model llama3.2     # pay-per-token inference (OpenAI-compatible)
 ```
+
+To select a specific host, copy its **ID** from `petabyte specs` into
+`petabyte launch <template> --spec <ID> --hours 1`. For example, if the table shows ID `246`:
+
+```bash
+petabyte launch fedora-kde --spec 246 --hours 1 --max-price 0.13
+```
+
+From client version 0.4.9, `launch --spec` also accepts the marketplace's public host ID.
+You do not need to translate a public ID into a number. Without `--spec`, an interactive terminal
+shows a numbered GPU picker; scripts and `--json` let the server select a matching host.
 
 ## Commands
 

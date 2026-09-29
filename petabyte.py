@@ -288,7 +288,9 @@ def cmd_specs(a, cfg):
         _ui.out.table(["ID", "GPU", "$/HR", "UNITS", "REP", "PROVIDER", ""], rows,
                       aligns=["right", "left", "right", "right", "right", "left", "left"],
                       title="GPUs you can rent right now (cheapest first)")
-        _ui.out.command("petabyte launch ollama --hours 1", caption="Rent one:")
+        _ui.out.command(f"petabyte launch ollama --spec {specs[0]['spec_id']} --hours 1",
+                        caption="Use an ID from this table with --spec:")
+        _ui.out.info("Leave out --spec to choose from the interactive GPU picker.")
         return
     print(_dim(f"  {'ID':>3}  {'GPU':<10} {'$/HR':>7}  {'UNITS':>5}  {'REP':>3}  PROVIDER"))
     for sp in specs:
@@ -300,6 +302,8 @@ def cmd_specs(a, cfg):
                 f"{_amber('$'+format(sp['price_per_hour'],'.2f')):>7}  "
                 f"{sp['available_units']:>5}  {rep:>3}  {sp['provider']}")
         print(line + ("  " + " ".join(tags) if tags else ""))
+    print(f"Use an ID from this table with --spec: petabyte launch ollama --spec {specs[0]['spec_id']} --hours 1")
+    print("Leave out --spec to choose from the interactive GPU picker.")
 
 
 def _read_code(path):
@@ -510,7 +514,7 @@ def _pick_gpu(c):
                                  ("region✓", sp.get("region_verified"))) if on]
         print(f"  {i:>2}) {str(sp.get('gpu_model') or 'CPU'):<24} "
               f"{_amber('$'+format(sp['price_per_hour'], '.2f')+'/hr')}  "
-              f"{sp['available_units']} unit(s)  {sp.get('provider', '')}  {loc}"
+              f"{sp['available_units']} unit(s)  ID {sp['spec_id']}  {sp.get('provider', '')}  {loc}"
               + ("  " + " ".join(tags) if tags else ""))
     if standby:
         print(_amber("  standby (on-demand DigitalOcean capacity, ~90s to provision "
@@ -1176,7 +1180,7 @@ def _build_parser():
     s.add_argument("--hours", type=int, default=2)
     s.add_argument("--region")
     s.add_argument("--max-price", type=_finite_float, dest="max_price", help="cap the $/hour you'll pay")
-    s.add_argument("--spec", type=int, help="pin to a specific host spec id")
+    s.add_argument("--spec", metavar="ID", help="host ID from 'petabyte specs' or marketplace public ID; omit for the interactive GPU picker")
     # template_params for repo-driven templates (swarm audits the repo; space serves it):
     s.add_argument("--repo", help="git https URL to run (swarm: the repo to audit; space: the app to serve)")
     s.add_argument("--ref", help="branch / tag / commit of --repo")
