@@ -25,6 +25,13 @@ ALIASES = {
     "mistral:7b": ("hf", "mistralai/Mistral-7B-Instruct-v0.3"),
     "phi3:mini": ("hf", "microsoft/Phi-3-mini-4k-instruct"),
     "gemma2:9b": ("hf", "google/gemma-2-9b-it"),
+    # Discovery/download aliases, not text-generation runtime presets. These models
+    # need their own audio, image or video pipelines after the weights are pulled.
+    "ace-step-v1:3.5b": ("hf", "ACE-Step/ACE-Step-v1-3.5B"),
+    "dia:1.6b": ("hf", "nari-labs/Dia-1.6B"),
+    "krea2:turbo": ("hf", "krea/Krea-2-Turbo"),
+    "minimax-h3": ("hf", "MiniMaxAI/MiniMax-H3"),
+    "qwen-image:2.1": ("hf", "Qwen/Qwen-Image-2.1"),
 }
 
 

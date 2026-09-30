@@ -13,6 +13,9 @@ SCHEMA_VERSION = 1
 _BYTES_PER_PARAM = {"f32": 4.0, "f16": 2.0, "bf16": 2.0, "int8": 1.0, "q8": 1.06,
                     "q6": 0.82, "q5": 0.68, "q4": 0.56, "q3": 0.43, "q2": 0.34}
 
+NON_TEXT_PIPELINES = frozenset({"text-to-audio", "text-to-speech", "text-to-image",
+                                "text-to-video", "image-to-video", "image-text-to-video"})
+
 
 class ModelFile:
     """One artifact to fetch. `sha256` is set only when the source publishes a real content hash
@@ -81,6 +84,10 @@ class Manifest:
     def estimate_requirements(self) -> dict:
         """Best-effort RAM/VRAM/disk from parameter count + dtype/quant. Providers may override."""
         disk_gb = round((self.total_size or 0) / (1024 ** 3), 1)
+        if self.extra.get("pipeline") in NON_TEXT_PIPELINES:
+            # Diffusion/audio/video working sets depend on their runtime, encoders and
+            # offloading strategy. A text-model KV-cache formula is misleading here.
+            return {"disk_gb": disk_gb, "vram_gb": None, "ram_gb": None}
         bpp = self._bytes_per_param()
         if self.parameters and bpp:
             weights_gb = self.parameters * bpp / (1024 ** 3)

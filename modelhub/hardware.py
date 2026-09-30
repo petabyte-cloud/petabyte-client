@@ -9,6 +9,8 @@ import re
 import shutil
 import subprocess
 
+from .manifest import NON_TEXT_PIPELINES
+
 
 def _run(cmd, timeout=4):
     try:
@@ -85,6 +87,7 @@ def compatibility(manifest, hw=None, *, cache_home=None) -> dict:
     reasons, and (when short on VRAM) suggested lighter quantizations."""
     hw = hw or detect(cache_home=cache_home)
     req = manifest.requirements or {}
+    multimodal = manifest.extra.get("pipeline") in NON_TEXT_PIPELINES
     need_vram = req.get("vram_gb") or 0
     need_ram = req.get("ram_gb") or 0
     need_disk = req.get("disk_gb") or round((manifest.total_size or 0) / (1024 ** 3), 1)
@@ -120,6 +123,9 @@ def compatibility(manifest, hw=None, *, cache_home=None) -> dict:
 
     if blocking:
         level = "insufficient"
+    elif multimodal:
+        level = "unknown"
+        reasons.append("runtime-specific GPU memory and software requirements are not verified")
     elif cpu_only:
         level = "tight"                       # CPU-capable but slower than on a GPU
     elif any("tight" in r for r in reasons):
