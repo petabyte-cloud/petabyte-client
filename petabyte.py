@@ -551,6 +551,51 @@ def _public_port(value):
         raise argparse.ArgumentTypeError("use PORT/tcp or PORT/udp, with PORT in 1..65535") from None
 
 
+def _probe_gateways(c, samples=3, timeout=2.0):
+    """[(gateway, ms or None)] for every gateway GET /gateways lists: the best TCP connect time from
+    THIS machine to its ping host on :443. That is the hop a rental's traffic takes from you, so
+    `--gateway auto` sends these and the server picks the fastest. Never fatal."""
+    import socket
+    from urllib.parse import urlsplit
+    try:
+        r = c.get("/gateways")
+        gws = r.json().get("gateways", []) if r.status_code == 200 else []
+    except Exception:  # noqa: BLE001 — an older server has no /gateways: auto-pick server-side
+        return []
+    out = []
+    for g in gws:
+        host = urlsplit(str(g.get("ping_url") or "")).hostname
+        best = None
+        for _ in range(samples if host else 0):
+            try:
+                t0 = time.monotonic()
+                with socket.create_connection((host, 443), timeout=timeout):
+                    ms = (time.monotonic() - t0) * 1000
+                best = ms if best is None else min(best, ms)
+            except OSError:
+                break
+        out.append((g, round(best, 1) if best is not None else None))
+    return out
+
+
+def cmd_gateways(a, cfg):
+    """List the connection gateways and your latency to each (what `--gateway auto` uses)."""
+    with _client(cfg) as c:
+        rows = _probe_gateways(c)
+    if JSON:
+        print(json.dumps({"gateways": [dict(g, rtt_ms=ms) for g, ms in rows]}))
+        return
+    if not rows:
+        print("this server lists no gateways (single-gateway deployment)")
+        return
+    fastest = min((ms for _, ms in rows if ms is not None), default=None)
+    for g, ms in rows:
+        mark = _green(" ← fastest") if ms is not None and ms == fastest else ""
+        print(f"  {g['id']:<4} {g.get('label', ''):<24} {g.get('country', ''):<3} "
+              + (f"{ms:7.1f} ms" if ms is not None else "  unreachable") + mark)
+    print(_dim("  launch with --gateway <id> to pin one, or --residency SA to keep data in Saudi Arabia"))
+
+
 def cmd_launch(a, cfg):
     """Launch a ready-made template (ollama, jupyter, blender, minecraft, …) on the cheapest
     verified GPU that fits — the CLI twin of the web one-click launcher (`POST /launch`)."""
@@ -565,6 +610,10 @@ def cmd_launch(a, cfg):
         body["region"] = a.region
     if getattr(a, "spec", None):
         body["spec_id"] = str(a.spec)
+    if getattr(a, "gateway", None) and a.gateway != "auto":
+        body["gateway"] = a.gateway
+    if getattr(a, "residency", None):
+        body["residency"] = a.residency.strip().upper()
     # repo-driven templates (swarm/space) carry their config in template_params; the server validates.
     tp = {k: getattr(a, k) for k in ("repo", "ref", "job", "model", "agents", "max_files")
           if getattr(a, k, None) not in (None, "")}
@@ -609,6 +658,10 @@ def cmd_launch(a, cfg):
             chosen = _pick_gpu(c)
             if chosen is not None:
                 body["spec_id"] = str(chosen)
+        if "gateway" not in body:                # auto: let the server pick the fastest for YOU
+            rtt = {g["id"]: ms for g, ms in _probe_gateways(c) if ms is not None}
+            if rtt:
+                body["gateway_rtt_ms"] = rtt
         r = c.post("/launch", json=body)
         if r.status_code != 200:
             _die("launch failed", r)
@@ -620,6 +673,9 @@ def cmd_launch(a, cfg):
             print(f"  task #{d.get('task_id')}   results {d['result_url']}")
         if d.get("routing_explanation"):
             print("  " + _dim(d["routing_explanation"]))
+        if isinstance(d.get("gateway"), dict):
+            print(f"  gateway  {d['gateway'].get('label', d['gateway'].get('id'))}"
+                  + (f"   data residency {d['residency']}" if d.get("residency") else ""))
         url = d.get("url")
         addr = url.get("http") if isinstance(url, dict) else url
         if addr:
@@ -1156,6 +1212,7 @@ def _build_parser():
     s = sub.add_parser("deposit");  s.add_argument("amount", type=_finite_float)
     sub.add_parser("wallet")
     sub.add_parser("specs")
+    sub.add_parser("gateways", help="list connection gateways and your latency to each")
     s = sub.add_parser("run", help="run a notebook/.py on a rented GPU, OR start a model runtime")
     s.add_argument("--deps", dest="deps", action="store_true", default=None,
                    help="bundle the whole project folder (auto when siblings/requirements.txt exist)")
@@ -1181,6 +1238,10 @@ def _build_parser():
     s.add_argument("--region")
     s.add_argument("--max-price", type=_finite_float, dest="max_price", help="cap the $/hour you'll pay")
     s.add_argument("--spec", metavar="ID", help="host ID from 'petabyte specs' or marketplace public ID; omit for the interactive GPU picker")
+    s.add_argument("--gateway", choices=["auto", "us", "sa"], default="auto",
+                   help="connection gateway: auto (fastest for you, measured), us, or sa (Riyadh); see 'petabyte gateways'")
+    s.add_argument("--residency", metavar="CC",
+                   help="keep the rental's data in this country (e.g. SA): verified in-country host + gateway, in-country checkpoints")
     # template_params for repo-driven templates (swarm audits the repo; space serves it):
     s.add_argument("--repo", help="git https URL to run (swarm: the repo to audit; space: the app to serve)")
     s.add_argument("--ref", help="branch / tag / commit of --repo")
@@ -1302,6 +1363,7 @@ def _build_parser():
 
 
 COMMANDS = {"deposit": cmd_deposit, "login": cmd_login, "wallet": cmd_wallet, "specs": cmd_specs,
+            "gateways": cmd_gateways,
             "run": cmd_run, "launch": cmd_launch, "vpn": cmd_vpn, "earnings": cmd_earnings,
             "node": cmd_node, "ask": cmd_ask, "render": cmd_render, "transcode": cmd_transcode,
             "download": cmd_download,

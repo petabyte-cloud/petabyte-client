@@ -58,7 +58,15 @@ _INSTANCE_FIELDS = (
     "migrations",
     "created_at",
 )
-_INSTANCE_URL_FIELDS = ("hostname", "http", "ssh", "game_server", "default_user")
+_INSTANCE_URL_FIELDS = (
+    "hostname",
+    "http",
+    "ssh",
+    "game_server",
+    "default_user",
+    "gateway",
+    "residency",
+)
 
 
 def _instance_url(raw: Mapping[str, Any]) -> dict[str, Any]:
@@ -143,6 +151,8 @@ _LAUNCH_FIELDS = (
     "status",
     "routing_explanation",
     "connect",
+    "gateway",
+    "residency",
 )
 
 

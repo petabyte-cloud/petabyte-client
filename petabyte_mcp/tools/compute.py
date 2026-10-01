@@ -21,7 +21,9 @@ from ..validation import (
     TERMINAL_STATUSES,
     ComputeMode,
     Confirm,
+    CountryCode,
     ExtendHours,
+    GatewayChoice,
     Hours,
     IdempotencyKey,
     InstanceId,
@@ -123,12 +125,19 @@ def register(server: MCPServer, rt: Runtime) -> None:
         offer_id: OfferId | None = None,
         template_params: dict[str, Any] | None = None,
         compute_mode: ComputeMode | None = None,
+        gateway: GatewayChoice | None = None,
+        residency: CountryCode | None = None,
         confirm: Confirm = False,
         idempotency_key: IdempotencyKey | None = None,
     ) -> dict[str, Any]:
         """Launch a GPU instance from a template (see list_templates) on the cheapest verified
         host that fits, or on a specific host via `offer_id` (from list_offers). Prepays
         `hours` x rate into escrow from the wallet; unused hours are refunded on stop.
+
+        `gateway` picks the connection gateway (see list_gateways): "auto" (default) measures
+        latency from this machine and uses the fastest; "us" or "sa" (Riyadh) pins one.
+        `residency` (e.g. "SA") keeps the data in that country: only a host verified there, an
+        in-country gateway, and checkpoints stored on that gateway's disk.
 
         Two-step: without `confirm=true` this only returns a cost estimate and what would be
         booked (no side effect). With `confirm=true` it books and launches. Pass the same
@@ -150,6 +159,10 @@ def register(server: MCPServer, rt: Runtime) -> None:
             intent["template_params"] = params
         if compute_mode:
             intent["compute_mode"] = compute_mode
+        if gateway and gateway != "auto":
+            intent["gateway"] = gateway
+        if residency:
+            intent["residency"] = residency
         if not confirm:
             facts: dict[str, Any] = {k: v for k, v in intent.items() if k != "template_params"}
             if offer_id:
@@ -168,6 +181,12 @@ def register(server: MCPServer, rt: Runtime) -> None:
             facts["suggested_idempotency_key"] = idempotency_key or _new_key("mcp-launch")
             return preview("create_instance", how=HOW_TO_CONFIRM_CREATE, **facts)
         key = idempotency_key or _new_key("mcp-launch")
+        if "gateway" not in intent:
+            from .. import gateways as _gws
+
+            rtt = _gws.rtt_map(await _gws.probe(rt))
+            if rtt:
+                intent["gateway_rtt_ms"] = rtt
         raw = await rt.post("/launch", json=intent, idempotency_key=key, long=True)
         out = shape_launch(raw)
         out["idempotency_key"] = key

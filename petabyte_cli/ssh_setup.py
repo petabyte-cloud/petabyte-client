@@ -379,8 +379,15 @@ class SshState:
 
 
 def zone_from_hostname(hostname: str) -> str:
-    """`q7bk2mrelpza.vm.petabyte.market` -> `vm.petabyte.market`. The VM id is the first label."""
+    """`q7bk2mrelpza.vm.petabyte.market` -> `vm.petabyte.market`. The VM id is the first label.
+
+    A VM served through a regional gateway lives one label deeper (`<id>.sa.vm.petabyte.market`,
+    resolving straight to the Riyadh gateway). Its zone is still `vm.petabyte.market`: the managed
+    `Host *.vm.petabyte.market` block matches every gateway's VMs, and `petabyte ssh --proxy %h`
+    dials %h itself, so it reaches whichever gateway that VM is on."""
     parts = (hostname or "").strip().strip(".").split(".")
+    if len(parts) > 3 and parts[1] not in ("vm", "vms") and parts[2] in ("vm", "vms"):
+        return ".".join(parts[2:])
     return ".".join(parts[1:]) if len(parts) > 2 else (hostname or "").strip()
 
 

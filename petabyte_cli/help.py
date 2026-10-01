@@ -37,6 +37,7 @@ GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
     ("BUYER", [
         ("specs", "available GPUs and their IDs for launch --spec"),
         ("launch <template>", "choose a GPU interactively, or pin one with --spec ID"),
+        ("gateways", "connection gateways + your latency (launch --gateway us|sa, --residency SA)"),
         ("run <file>", "run a notebook / .py on a rented GPU and print the result"),
         ("instances", "your running instances and recent bookings"),
         ("ssh [vm]", "set this computer up to reach your VMs, then connect"),

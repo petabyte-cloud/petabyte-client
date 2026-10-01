@@ -47,6 +47,10 @@ Confirm = StrictBool  # a JSON boolean only — "yes", 1, "true" are rejected
 
 SortKey = Literal["price", "vram", "rep"]
 ComputeMode = Literal["STANDARD", "VERIFIED", "CONFIDENTIAL"]
+GatewayChoice = Literal["auto", "us", "sa"]
+CountryCode = Annotated[
+    str, StringConstraints(strip_whitespace=True, to_upper=True, pattern=r"^[A-Za-z]{2}$")
+]
 CpuTee = Literal["sev_snp", "tdx", "any"]
 InstanceStatus = Literal["starting", "running", "migrating", "stopped", "failed"]
 

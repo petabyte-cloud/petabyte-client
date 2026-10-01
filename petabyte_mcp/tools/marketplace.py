@@ -91,6 +91,18 @@ def register(server: MCPServer, rt: Runtime) -> None:
         templates = shape_templates(raw)
         return {"templates": templates, "count": len(templates)}
 
+    @server.tool(name="list_gateways", title="List connection gateways", annotations=_READ)
+    async def list_gateways() -> dict[str, Any]:
+        """The connection gateways an instance can be served through (e.g. `us`, `sa` = Riyadh,
+        Saudi Arabia) with the latency from this machine to each. create_instance takes
+        `gateway` (auto picks the fastest of these) and `residency` (e.g. "SA": a host verified
+        in that country, an in-country gateway, checkpoints kept in-country). Requires no API key."""
+        await rt.authz.authorize("list_gateways")
+        from .. import gateways as _gws
+
+        rows = await _gws.probe(rt)
+        return {"gateways": rows, "count": len(rows)}
+
     @server.tool(name="estimate_cost", title="Estimate rental cost", annotations=_READ)
     async def estimate_cost(
         hours: EstimateHours = 1,
