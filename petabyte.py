@@ -599,6 +599,8 @@ def cmd_gateways(a, cfg):
 def cmd_launch(a, cfg):
     """Launch a ready-made template (ollama, jupyter, blender, minecraft, …) on the cheapest
     verified GPU that fits — the CLI twin of the web one-click launcher (`POST /launch`)."""
+    if getattr(a, "spot", False):
+        return _launch_spot(a, cfg)
     body = {"template": a.template, "hours": a.hours}
     if getattr(a, "cached_image_only", False):
         body["cached_image_only"] = True
@@ -690,6 +692,40 @@ def cmd_launch(a, cfg):
                 print(f"  password       {url['login']['password']}")
         if d.get("connect"):
             print("  " + _dim(d["connect"]))
+
+
+def _launch_spot(a, cfg):
+    """`launch --spot`: interruptible rental on the cheapest idle host at/below --max-price
+    (`POST /spot/launch`). The server picks the host, so host/gateway pinning doesn't apply."""
+    if getattr(a, "max_price", None) is None:
+        _die("--spot needs --max-price: the most $/hour you'll pay for interruptible time")
+    clash = [flag for flag, on in (("--spec", getattr(a, "spec", None)),
+                                   ("--gateway", getattr(a, "gateway", "auto") not in (None, "auto")),
+                                   ("--residency", getattr(a, "residency", None)),
+                                   ("--python", getattr(a, "python_file", None))) if on]
+    if clash:
+        _die(f"--spot can't be combined with {', '.join(clash)}: spot picks the cheapest idle host itself")
+    body = {"template": a.template, "hours": a.hours, "max_price": a.max_price}
+    if getattr(a, "region", None):
+        body["region"] = a.region
+    tp = {k: getattr(a, k) for k in ("repo", "ref", "job", "model", "agents", "max_files")
+          if getattr(a, k, None) not in (None, "")}
+    if tp:
+        body["template_params"] = tp
+    with _client(cfg) as c:
+        r = c.post("/spot/launch", json=body)
+        if r.status_code != 200:
+            _die("spot launch failed", r)
+        d = r.json()
+    print(_green("✓ launched spot ") + _bold(a.template) +
+          _dim(f"  · {d.get('gpu_model', '?')} @ ${d.get('spot_price_per_hour', '?')}/hr"
+               f" (max ${d.get('max_price', a.max_price)}) · {a.hours}h"))
+    print(f"  booking #{d.get('booking_id')}   escrow ${d.get('gross_amount')}   vm {d.get('vm_id')}")
+    url = d.get("url")
+    addr = url.get("http") if isinstance(url, dict) else url
+    if addr:
+        print("  address  " + _cyan(addr))
+    print("  " + _dim(d.get("notice") or "Interruptible — may stop at any time; billed per second."))
 
 
 def cmd_ask(a, cfg):
@@ -1237,6 +1273,8 @@ def _build_parser():
     s.add_argument("--hours", type=int, default=2)
     s.add_argument("--region")
     s.add_argument("--max-price", type=_finite_float, dest="max_price", help="cap the $/hour you'll pay")
+    s.add_argument("--spot", action="store_true",
+                   help="interruptible: cheapest idle host at/below --max-price, billed per second, may stop any time")
     s.add_argument("--spec", metavar="ID", help="host ID from 'petabyte specs' or marketplace public ID; omit for the interactive GPU picker")
     s.add_argument("--gateway", choices=["auto", "us", "sa"], default="auto",
                    help="connection gateway: auto (fastest for you, measured), us, or sa (Riyadh); see 'petabyte gateways'")
