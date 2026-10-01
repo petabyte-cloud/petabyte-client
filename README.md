@@ -65,6 +65,19 @@ petabyte launch fedora-kde --spec 246 --hours 1 --max-price 0.13
 ```
 
 From client version 0.4.9, `launch --spec` also accepts the marketplace's public host ID.
+
+From 0.5.0, spot (interruptible, billed per second) rentals:
+
+```bash
+petabyte launch jupyter --spot --max-price 0.50 --hours 1                    # now, or fail
+petabyte launch jupyter --spot --gpu a100-80gb --max-price 1.20 --within 24h # wait for one
+petabyte orders                 # waiting orders
+petabyte orders cancel <id>
+```
+
+A waiting spot order starts (and emails you) as soon as a matching host is idle, and resumes from
+its checkpoint after an interruption until it expires. `--spec ID` and `--gateway us|sa` pin a host
+or gateway.
 You do not need to translate a public ID into a number. Without `--spec`, an interactive terminal
 shows a numbered GPU picker; scripts and `--json` let the server select a matching host.
 
