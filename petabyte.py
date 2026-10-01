@@ -742,20 +742,40 @@ def cmd_launch(a, cfg):
             print("  " + _dim(d["connect"]))
 
 
+def _duration(text):
+    """'90m' / '12h' / '3d' -> timedelta (argparse type for --within)."""
+    import datetime as _dt
+    import re as _re
+    m = _re.fullmatch(r"\s*(\d+)\s*([mhd])\s*", str(text or "").lower())
+    if not m or int(m[1]) <= 0:
+        raise argparse.ArgumentTypeError("use a duration like 90m, 12h or 3d")
+    unit = {"m": "minutes", "h": "hours", "d": "days"}[m[2]]
+    return _dt.timedelta(**{unit: int(m[1])})
+
+
 def _launch_spot(a, cfg):
-    """`launch --spot`: interruptible rental on the cheapest idle host at/below --max-price
-    (`POST /spot/launch`). The server picks the host, so host/gateway pinning doesn't apply."""
+    """`launch --spot`: interruptible rental at or below --max-price, billed per second.
+    Now: `POST /spot/launch` (cheapest idle host, optionally one --spec / --gateway).
+    With --within or --gpu: a waiting spot order (`POST /gpu-orders`) that starts as soon as a
+    matching host is idle, and resumes from its checkpoint after an interruption."""
     if getattr(a, "max_price", None) is None:
         _die("--spot needs --max-price: the most $/hour you'll pay for interruptible time")
-    clash = [flag for flag, on in (("--spec", getattr(a, "spec", None)),
-                                   ("--gateway", getattr(a, "gateway", "auto") not in (None, "auto")),
-                                   ("--residency", getattr(a, "residency", None)),
+    clash = [flag for flag, on in (("--residency", getattr(a, "residency", None)),
                                    ("--python", getattr(a, "python_file", None))) if on]
     if clash:
-        _die(f"--spot can't be combined with {', '.join(clash)}: spot picks the cheapest idle host itself")
+        _die(f"--spot can't be combined with {', '.join(clash)} yet")
+    if getattr(a, "within", None) or getattr(a, "gpu", None):
+        return _spot_order(a, cfg)
     body = {"template": a.template, "hours": a.hours, "max_price": a.max_price}
     if getattr(a, "region", None):
         body["region"] = a.region
+    if getattr(a, "spec", None):
+        try:
+            body["spec_id"] = int(a.spec)
+        except ValueError:
+            _die("--spot --spec takes the numeric host ID from 'petabyte specs'")
+    if getattr(a, "gateway", None) not in (None, "auto"):
+        body["gateway"] = a.gateway
     tp = {k: getattr(a, k) for k in ("repo", "ref", "job", "model", "agents", "max_files")
           if getattr(a, k, None) not in (None, "")}
     if tp:
@@ -774,6 +794,74 @@ def _launch_spot(a, cfg):
     if addr:
         print("  address  " + _cyan(addr))
     print("  " + _dim(d.get("notice") or "Interruptible — may stop at any time; billed per second."))
+
+
+def _spot_order(a, cfg):
+    """A waiting spot order: GPU model required (the order book matches on it)."""
+    import datetime as _dt
+    import uuid as _uuid
+    if not getattr(a, "gpu", None):
+        _die("--within needs --gpu (e.g. --gpu a100-80gb or --gpu rtx-2060)")
+    body = {"gpu_id": a.gpu, "template": a.template, "kind": "limit", "spot": True,
+            "price_cap": a.max_price, "hours": a.hours}
+    within = getattr(a, "within", None) or _dt.timedelta(hours=24)
+    body["expires_at"] = (_dt.datetime.now(_dt.timezone.utc) + within).isoformat()
+    if getattr(a, "region", None):
+        body["region"] = a.region
+    if getattr(a, "spec", None):
+        try:
+            body["spec_id"] = int(a.spec)
+        except ValueError:
+            _die("--spot --spec takes the numeric host ID from 'petabyte specs'")
+    if getattr(a, "gateway", None) not in (None, "auto"):
+        body["gateway"] = a.gateway
+    with _client(cfg) as c:
+        r = c.post("/gpu-orders", json=body, headers={"Idempotency-Key": _uuid.uuid4().hex})
+        if r.status_code != 200:
+            _die("spot order failed", r)
+        d = r.json()
+    if JSON:
+        print(json.dumps(d))
+        return
+    if d.get("state") == "filled":
+        print(_green("✓ started now ") + _bold(a.template) + _dim(f"  · order {d.get('id')}"))
+    else:
+        print(_green("✓ waiting ") + _bold(f"{a.gpu} {a.template}") +
+              _dim(f"  · up to ${d.get('price_cap')}/hr · {a.hours}h · until {d.get('expires_at')}"))
+    print(f"  order {d.get('id')}   state {d.get('state')}")
+    if d.get("message"):
+        print("  " + _dim(d["message"]))
+    print("  " + _dim("you'll get an email when it starts · petabyte orders · petabyte orders cancel <id>"))
+
+
+def cmd_orders(a, cfg):
+    """List your GPU orders, or cancel one (`petabyte orders cancel <id>`)."""
+    with _client(cfg) as c:
+        if getattr(a, "action", None) == "cancel":
+            if not getattr(a, "order_id", None):
+                _die("usage: petabyte orders cancel <order-id>")
+            r = c.delete(f"/gpu-orders/{a.order_id}")
+            if r.status_code != 200:
+                _die("cancel failed", r)
+            print(_green("✓ cancelled ") + a.order_id)
+            return
+        r = c.get("/gpu-orders")
+        if r.status_code != 200:
+            _die("could not list orders", r)
+        rows = r.json()
+    if JSON:
+        print(json.dumps(rows))
+        return
+    if not rows:
+        print("No GPU orders.")
+        return
+    for o in rows:
+        kind = "spot" if o.get("spot") else o.get("kind")
+        print(f"{o['id'][:12]}  {o.get('state', '?'):<10} {kind:<6} {o.get('gpu_id'):<14} "
+              f"{o.get('template'):<10} ≤${o.get('price_cap')}/hr  {o.get('hours')}h  "
+              f"until {o.get('expires_at')}")
+        if o.get("message"):
+            print("    " + _dim(o["message"]))
 
 
 def cmd_ask(a, cfg):
@@ -1324,6 +1412,10 @@ def _build_parser():
     s.add_argument("--max-price", type=_finite_float, dest="max_price", help="cap the $/hour you'll pay")
     s.add_argument("--spot", action="store_true",
                    help="interruptible: cheapest idle host at/below --max-price, billed per second, may stop any time")
+    s.add_argument("--gpu", metavar="ID",
+                   help="with --spot: wait for this GPU model (e.g. a100-80gb, rtx-2060) instead of failing when none is idle")
+    s.add_argument("--within", type=_duration, metavar="DURATION",
+                   help="with --spot --gpu: how long the order waits for a host (e.g. 12h, 3d; default 24h, max 7d)")
     s.add_argument("--spec", metavar="ID", help="host ID from 'petabyte specs' or marketplace public ID; omit for the interactive GPU picker")
     s.add_argument("--gateway", choices=["auto", "us", "sa"], default="auto",
                    help="connection gateway: auto (fastest for you, measured), us, or sa (Riyadh); see 'petabyte gateways'")
@@ -1398,6 +1490,9 @@ def _build_parser():
     j = sub.add_parser("instances", aliases=["jobs"], help="your running VMs and rental history")
     j.add_argument("--limit", type=int, default=10)
     sub.add_parser("activity", help="recent notifications")
+    o = sub.add_parser("orders", help="your waiting GPU / spot orders; 'orders cancel <id>' to cancel one")
+    o.add_argument("action", nargs="?", choices=["list", "cancel"], default="list")
+    o.add_argument("order_id", nargs="?")
     sub.add_parser("menu", help="the guided menu")
     sub.add_parser("version", help="CLI / Python / update status")
     ag = sub.add_parser("agent", help="seller agent: install | start | stop | status | logs")
@@ -1455,7 +1550,7 @@ COMMANDS = {"deposit": cmd_deposit, "topup": cmd_topup, "login": cmd_login, "wal
             "node": cmd_node, "ask": cmd_ask, "render": cmd_render, "transcode": cmd_transcode,
             "download": cmd_download,
             "me": cmd_me, "doctor": cmd_doctor, "instances": cmd_instances, "jobs": cmd_instances,
-            "activity": cmd_activity,
+            "activity": cmd_activity, "orders": cmd_orders,
             "version": cmd_version, "agent": cmd_agent, "ssh": cmd_ssh}
 
 
