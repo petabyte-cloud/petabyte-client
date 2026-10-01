@@ -235,10 +235,58 @@ def _finite_float(s):
     return v
 
 
+def _topup_checkout(c, amount):
+    """Live-money funding: create a Stripe hosted-checkout top-up and open it in the browser.
+    Direct /deposit mints balance for free, so it is disabled in live mode — real funds come
+    only through checkout, and the webhook credits the wallet once the card clears."""
+    import webbrowser
+    minor = int(round(float(amount) * 100))
+    if minor < 1:
+        _die("amount must be at least $0.01")
+    r = c.post("/wallet/topup", json={"amount_minor": minor})
+    if r.status_code != 200:
+        _die("could not start checkout", r)
+    d = r.json()
+    url = d.get("checkout_url")
+    if not url:
+        _die("checkout did not return a payment link", r)
+    if JSON:
+        print(json.dumps(d))
+        return
+    mode = d.get("mode") or ("TEST" if d.get("test_mode") else "LIVE")
+    dollars = f"${float(amount):,.2f}"
+    if _ui is not None:
+        _ui.out.brand("Add funds")
+        _ui.out.line(f"Direct deposit is off; opening Stripe checkout for {dollars} ({mode}).")
+        _ui.out.line("Your balance is credited once the payment completes.")
+        _ui.out.command(url)
+    else:
+        print(f"Opening Stripe checkout for {dollars} ({mode}):\n  " + _cyan(url) +
+              "\nYour balance is credited once the payment completes.")
+    try:
+        webbrowser.open(url)
+    except Exception:
+        pass
+
+
 def cmd_deposit(a, cfg):
     with _client(cfg) as c:
         r = c.post("/deposit", json={"amount": a.amount})
-    print(f"balance: ${r.json()['balance']}" if r.status_code == 200 else _die("deposit failed", r))
+        if r.status_code == 200:
+            print(f"balance: ${r.json()['balance']}")
+            return
+        # Live mode refuses direct deposit ("use checkout"): fall back to a Stripe top-up
+        # instead of dead-ending on a 403.
+        if r.status_code == 403 and "checkout" in (_humanize_error(r) or "").lower():
+            _topup_checkout(c, a.amount)
+            return
+        _die("deposit failed", r)
+
+
+def cmd_topup(a, cfg):
+    """Add funds via Stripe hosted checkout — the live-money path (alias of deposit in live mode)."""
+    with _client(cfg) as c:
+        _topup_checkout(c, a.amount)
 
 
 def cmd_wallet(a, cfg):
@@ -1246,6 +1294,7 @@ def _build_parser():
                                      "the CLI; token also via $PETABYTE_TOKEN")
     s.add_argument("--web", action="store_true", help="(default) browser device-login")
     s = sub.add_parser("deposit");  s.add_argument("amount", type=_finite_float)
+    tp = sub.add_parser("topup");  tp.add_argument("amount", type=_finite_float)
     sub.add_parser("wallet")
     sub.add_parser("specs")
     sub.add_parser("gateways", help="list connection gateways and your latency to each")
@@ -1400,7 +1449,7 @@ def _build_parser():
     return p
 
 
-COMMANDS = {"deposit": cmd_deposit, "login": cmd_login, "wallet": cmd_wallet, "specs": cmd_specs,
+COMMANDS = {"deposit": cmd_deposit, "topup": cmd_topup, "login": cmd_login, "wallet": cmd_wallet, "specs": cmd_specs,
             "gateways": cmd_gateways,
             "run": cmd_run, "launch": cmd_launch, "vpn": cmd_vpn, "earnings": cmd_earnings,
             "node": cmd_node, "ask": cmd_ask, "render": cmd_render, "transcode": cmd_transcode,
