@@ -52,6 +52,7 @@ petabyte specs                                        # available GPUs; use the 
 petabyte launch ollama --hours 2                      # choose a GPU from the interactive picker
 petabyte run train.ipynb --gpu "RTX 4090" --hours 1   # run a notebook / .py on a rented GPU
 petabyte instances                                         # what's running, recent bookings
+petabyte extend <vm-id> --hours 2                     # add hours to a running VM (shows the charge, confirms)
 petabyte ssh                                          # one-time: make this computer able to reach your VMs
 petabyte ssh <vm-id>                                  # then connect
 petabyte ask "explain attention" --model llama3.2     # pay-per-token inference (OpenAI-compatible)
@@ -95,6 +96,7 @@ shows a numbered GPU picker; scripts and `--json` let the server select a matchi
 | | `agent status\|logs\|install\|start\|stop` | the same as subcommands |
 | | `earnings` · `node status <id>` · `node sync-models <id>` | payouts · one node in detail · report cached models |
 | **Buyer** | `specs` · `launch <template>` · `run <file>` · `jobs` | rent and run |
+| | `extend <vm-id> --hours N` | add hours to a running VM: shows hours × $/hr, confirms (`--yes` to skip); accepts a pasted address/URL (0.5.1+) |
 | | `ssh [vm-id]` | set this computer up to reach your VMs, then connect (`--status`, `--print`, `--key`, `--new-key`) |
 | | `ask "<prompt>"` · `render` · `transcode` · `vpn <booking>` | inference · Blender · NVENC · WireGuard config |
 | **Models** | `model search\|info\|pull\|list\|inspect\|remove` · `pull <id>` · `run <model-id>` | local model hub (no account needed) |

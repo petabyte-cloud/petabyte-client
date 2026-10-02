@@ -446,6 +446,7 @@ def bare_vm_id(target: str) -> str:
     `root@root@…`. A VM-id is a single opaque label, so: drop any `user@` prefix, tolerate a pasted
     URL-ish form, and keep the first dotted label."""
     s = (target or "").strip()
+    s = s.split("://", 1)[-1]          # a pasted `https://<id>…/lab?token=…` (was reduced to "https:")
     if "@" in s:                       # `user` is passed separately; the login user is not the id
         s = s.split("@", 1)[1]
     s = s.split("/")[0]                # tolerate a stray path/scheme fragment

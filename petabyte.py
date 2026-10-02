@@ -1222,6 +1222,7 @@ def cmd_instances(a, cfg):
                         f"{float(v.get('hourly_rate') or 0):.2f}",
                         (v.get("url") or {}).get("hostname") if isinstance(v.get("url"), dict) else v.get("url")]
                        for v in live], title="Running now")
+        _ui.out.command("petabyte extend <VM> --hours N", caption="Add hours to one:")
     else:
         _ui.out.info("Nothing running right now.")
     rows = bk.get("bookings") or []
@@ -1233,6 +1234,43 @@ def cmd_instances(a, cfg):
                        for b in rows], title="Recent bookings")
     if not live:
         _ui.out.command("petabyte specs", caption="Rent a GPU:")
+
+
+def cmd_extend(a, cfg):
+    """`petabyte extend <vm> --hours N`: buy more hours on a running rental (`POST /vm/{id}/extend`).
+    Shows the charge (hours x the rental's $/hr) and confirms unless --yes. Every call carries a
+    fresh Idempotency-Key, so a transport-level retry replays the first answer instead of debiting
+    twice; running the command again is a new, deliberate extension."""
+    _require_product()
+    import uuid
+    from petabyte_cli.ssh_setup import bare_vm_id
+    vm_id = bare_vm_id(a.vm)              # accepts a pasted address / https://…/lab?token=… URL
+    if not vm_id:
+        _die("usage: petabyte extend <vm-id> --hours N   (VM ids: petabyte instances)")
+    if not 1 <= a.hours <= 720:
+        _die("--hours must be between 1 and 720")
+    with _client(cfg) as c:
+        r = c.get(f"/vm/{vm_id}")
+        if r.status_code == 404:
+            _die(f"no VM {vm_id} on your account (see: petabyte instances)", r)
+        try:
+            rate = float(r.json()["hourly_rate"]) if r.status_code == 200 else None
+        except (ValueError, TypeError, KeyError):
+            rate = None                       # price unknown (e.g. key without compute:read): server still charges correctly
+        cost = f"${a.hours * rate:.2f} (${rate:.2f}/hr)" if rate is not None else "at the rental's hourly rate"
+        if not getattr(a, "yes", False) and (JSON or not _ui.out.confirm(
+                f"Extend {vm_id} by {a.hours} h for {cost}?", default=False)):
+            _die("Not extended, nothing was charged. Confirm at the prompt, or pass --yes"
+                 + (" (required with --json)." if JSON else "."))
+        r = c.post(f"/vm/{vm_id}/extend", json={"hours": a.hours},
+                   headers={"Idempotency-Key": uuid.uuid4().hex})
+        if r.status_code != 200:
+            _die(f"could not extend {vm_id}" + (" (see: petabyte instances)" if r.status_code == 404 else ""), r)
+        d = r.json()
+    if JSON:
+        print(json.dumps(d))
+        return
+    _ui.out.ok(f"Extended {vm_id} by {a.hours} h for {cost}. {d.get('hours_left', '?')} h left.")
 
 
 def cmd_activity(a, cfg):
@@ -1365,7 +1403,7 @@ def _build_parser():
     p.add_argument("--install-agent", dest="install_agent", action="store_true", help="guided seller-agent setup")
     p.add_argument("--run-agent", dest="run_agent", action="store_true", help="start the seller agent")
     p.add_argument("--kill-agent", dest="kill_agent", action="store_true", help="stop the seller agent safely")
-    p.add_argument("-y", "--yes", action="store_true", help="assume yes for confirmations (install / stop)")
+    p.add_argument("-y", "--yes", action="store_true", help="assume yes for confirmations (install / stop / extend)")
     p.add_argument("--force", action="store_true", help="--kill-agent: stop even with active jobs")
     p.add_argument("--no-follow", dest="follow", action="store_false", default=None,
                    help="--run-agent: don't follow the log after starting")
@@ -1537,6 +1575,11 @@ def _build_parser():
     sh.add_argument("--dry-run", dest="dry_run", action="store_true", default=_S)
     sh.add_argument("-y", "--yes", action="store_true", default=_S)
 
+    ex = sub.add_parser("extend", help="buy more hours on a running VM (shows the charge, then confirms)")
+    ex.add_argument("vm", help="VM id from 'petabyte instances', or its pasted address / URL")
+    ex.add_argument("--hours", type=int, required=True, help="hours to add, 1..720 (on-demand GPUs: capped per extension)")
+    ex.add_argument("-y", "--yes", action="store_true", default=_S, help="skip the confirmation")
+
     # model hub: discover/pull/manage AI models (Hugging Face-grade UX). Owns `model`, `pull`, `auth`;
     # `run` is shared with the compute flow above and dispatched smartly below.
     if mh_cli is not None:
@@ -1550,7 +1593,7 @@ COMMANDS = {"deposit": cmd_deposit, "topup": cmd_topup, "login": cmd_login, "wal
             "node": cmd_node, "ask": cmd_ask, "render": cmd_render, "transcode": cmd_transcode,
             "download": cmd_download,
             "me": cmd_me, "doctor": cmd_doctor, "instances": cmd_instances, "jobs": cmd_instances,
-            "activity": cmd_activity, "orders": cmd_orders,
+            "activity": cmd_activity, "orders": cmd_orders, "extend": cmd_extend,
             "version": cmd_version, "agent": cmd_agent, "ssh": cmd_ssh}
 
 
