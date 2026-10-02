@@ -465,20 +465,38 @@ def host_for(vm_id: str, zone: str) -> str:
     return s if "." in s else f"{s}.{zone}"
 
 
+def direct_target(url) -> tuple[str, int] | None:
+    """(gateway host, port) of the rental's OWN public SSH port, from the API's VM `url`, or None.
+    The API lists it only when the rental's container port 22 has a port on its gateway."""
+    if not isinstance(url, dict):
+        return None
+    for p in url.get("ports") or []:
+        if (isinstance(p, dict) and p.get("container_port") == 22 and p.get("protocol") == "tcp"
+                and p.get("hostname") and type(p.get("public_port")) is int):
+            return str(p["hostname"]), p["public_port"]
+    return None
+
+
 def ssh_command(vm_id: str, zone: str, user: str = "root", configured: bool = True,
-                identity: str | None = None) -> list[str]:
+                identity: str | None = None, direct: tuple[str, int] | None = None) -> list[str]:
     """The argv to reach a VM. With our config block in place this is just `ssh user@host`; without
-    it, spell out the identity and host-key options so the command still works standalone."""
+    it, spell out the identity, host-key and gateway-relay options so it still works standalone.
+
+    `direct` (see direct_target) is plain OpenSSH to the rental's own port on its gateway — it wins,
+    since it is the only path when sshd is not the rental's main port. HostKeyAlias files the host
+    key under the VM's name, not the gateway's host:port (a later rental reuses the port)."""
     host = host_for(vm_id, zone)
+    kh = ["-o", "StrictHostKeyChecking=accept-new",
+          "-o", f"UserKnownHostsFile={os.path.join(ssh_dir(), 'known_hosts_petabyte')}"]
+    ident = ["-i", identity, "-o", "IdentitiesOnly=yes"] if identity else []
+    if direct:      # ProxyCommand=none: never let a managed `Host *.<zone>` block relay this one
+        return ["ssh", "-p", str(direct[1]), *ident, *kh, "-o", f"HostKeyAlias={host}",
+                "-o", "ProxyCommand=none", f"{user}@{direct[0]}"]
     if configured:
         return ["ssh", f"{user}@{host}"]
-    argv = ["ssh"]
-    if identity:
-        argv += ["-i", identity, "-o", "IdentitiesOnly=yes"]
-    argv += ["-o", "StrictHostKeyChecking=accept-new",
-             "-o", f"UserKnownHostsFile={os.path.join(ssh_dir(), 'known_hosts_petabyte')}",
-             f"{user}@{host}"]
-    return argv
+    # The VM name resolves to the gateway, whose own :22 is NOT the VM: go through the :2022 relay
+    # exactly as the managed config block does.
+    return ["ssh", *ident, *kh, "-o", "ProxyCommand=petabyte ssh --proxy %h", f"{user}@{host}"]
 
 
 def run_proxy(host: str, gw_port: int = 2022) -> int:

@@ -671,12 +671,25 @@ def cmd_launch(a, cfg):
         tp["public_ports"] = a.public_port
     if getattr(a, "public_port_profile", None):
         tp["public_port_profile"] = a.public_port_profile
+    if getattr(a, "ssh", False):
+        tp["ssh"] = True                     # key-only SSH into the container (server validates)
+    if getattr(a, "port", None) is not None:
+        tp["port"] = a.port
     if getattr(a, "snapshot", None):
         tp["snapshot_id"] = a.snapshot          # the server checks it is yours, ready, and this template's
     source_path = getattr(a, "python_file", None)
     python_options = (getattr(a, "script_args", None), getattr(a, "image", None),
                       getattr(a, "timeout", None), getattr(a, "cpu_only", False),
                       getattr(a, "min_vram", None))
+    if a.template == "custom":
+        # Your own registry image. --image/--cpu-only/--min-vram describe it; Python-job options don't apply.
+        if not getattr(a, "image", None) or source_path:
+            _die("custom needs --image <registry image>, e.g. "
+                 "--image pytorch/pytorch:2.4.0-cuda12.1-cudnn9-runtime (add --ssh to log in)")
+        tp.update(image=a.image, gpu=not getattr(a, "cpu_only", False))
+        if getattr(a, "min_vram", None) is not None:
+            tp["min_vram"] = a.min_vram
+        python_options = (getattr(a, "script_args", None), getattr(a, "timeout", None))
     if source_path:
         if a.template != "swarm" or tp:
             _die("--python is for swarm and cannot be combined with audit options", None)
@@ -734,6 +747,8 @@ def cmd_launch(a, cfg):
             print("  address  " + _cyan(addr))
         if isinstance(url, dict) and url.get("ssh"):
             print("  ssh      " + _dim(url["ssh"]))
+            if url.get("ssh_direct"):
+                print("           " + _dim(url["ssh_direct"] + "   (plain OpenSSH, key-only)"))
         if isinstance(url, dict):
             for service in url.get("ports", []):
                 print(f"  {service['protocol']} {service['container_port']} → {service['address']}")
@@ -1277,6 +1292,44 @@ def cmd_extend(a, cfg):
     _ui.out.ok(f"Extended {vm_id} by {a.hours} h for {cost}. {d.get('hours_left', '?')} h left.")
 
 
+def cmd_stop(a, cfg):
+    """`petabyte stop <vm>`: end a rental now (`POST /vm/{id}/stop`). Shows what will be billed and
+    refunded (the server's own stop_preview) and confirms unless --yes. Idempotent: an already
+    stopped VM is reported and nothing is sent; the server endpoint is idempotent too."""
+    _require_product()
+    from petabyte_cli.ssh_setup import bare_vm_id
+    vm_id = bare_vm_id(a.vm)
+    if not vm_id:
+        _die("usage: petabyte stop <vm-id>   (VM ids: petabyte instances)")
+    with _client(cfg) as c:
+        r = c.get(f"/vm/{vm_id}")
+        if r.status_code == 404:
+            _die(f"no VM {vm_id} on your account (see: petabyte instances)", r)
+        if r.status_code != 200:
+            _die(f"could not read {vm_id}", r)
+        d = r.json()
+        p = d.get("stop_preview") or {}
+        if p.get("kind") == "noop" or d.get("status") in ("stopped", "failed"):
+            if JSON:
+                print(json.dumps({"status": "already_stopped", "vm_id": vm_id}))
+            else:
+                _ui.out.ok(f"{vm_id} is already stopped; nothing to do.")
+            return
+        what = ("cancel it: nothing is billed and the prepay is refunded" if p.get("kind") == "cancel"
+                else f"bill {p.get('hours_billed', '?')} h (${float(p.get('charged') or 0):.2f}) and "
+                     f"refund ${float(p.get('refunded') or 0):.2f}")
+        if not getattr(a, "yes", False) and (JSON or not _ui.out.confirm(
+                f"Stop {vm_id} now? This will {what}.", default=False)):
+            _die("Not stopped. Confirm at the prompt, or pass --yes" + (" (required with --json)." if JSON else "."))
+        r = c.post(f"/vm/{vm_id}/stop")
+        if r.status_code != 200:
+            _die(f"could not stop {vm_id}", r)
+        res = r.json()
+    if JSON:
+        print(json.dumps(res))
+        return
+    _ui.out.ok(f"{'Cancelled' if res.get('status') == 'cancelled' else 'Stopped'} {vm_id}: "
+               f"charged ${float(res.get('charged') or 0):.2f}, refunded ${float(res.get('refunded') or 0):.2f}.")
 def cmd_snapshot(a, cfg):
     """`petabyte snapshot create|list|delete`: save a running rental's container as an image in
     Petabyte object storage, list yours, delete one. Relaunch: `petabyte launch <template>
@@ -1545,14 +1598,17 @@ def _build_parser():
                    help="publish a container service through its allocated gateway port; repeat up to 32 services")
     s.add_argument("--public-port-profile", choices=["sunshine"],
                    help="allocate Sunshine's TCP/UDP family; configure Sunshine with the returned port")
+    s.add_argument("--ssh", action="store_true",
+                   help="key-only SSH into the container (shell, cuda-dev, or custom with openssh-server in the image)")
+    s.add_argument("--port", type=int, help="custom/space: the container port your app serves")
     s.add_argument("--agents", type=int, help="swarm: number of agents (1-16)")
     s.add_argument("--max-files", type=int, dest="max_files", help="swarm: cap files audited (1-2000)")
     s.add_argument("--python", dest="python_file", metavar="FILE", help="swarm: execute a UTF-8 Python file as a batch job")
     s.add_argument("--script-arg", dest="script_args", action="append", help="Python script argument; repeat, or use --script-arg=--flag")
-    s.add_argument("--image", help="Python job: dependency image with python3 (default pinned Swarm image)")
+    s.add_argument("--image", help="custom: your registry image; Python job: dependency image with python3 (default pinned Swarm image)")
     s.add_argument("--timeout", type=int, help="Python job: seconds, 1..86400 (default 300; capped by paid time)")
-    s.add_argument("--cpu-only", action="store_true", help="Python job: do not request GPU access")
-    s.add_argument("--min-vram", type=int, help="Python job: minimum GPU memory in GB")
+    s.add_argument("--cpu-only", action="store_true", help="custom / Python job: do not request GPU access")
+    s.add_argument("--min-vram", type=int, help="custom / Python job: minimum GPU memory in GB")
     s.add_argument("--snapshot", metavar="ID",
                    help="relaunch from one of your snapshots (petabyte snapshot list); use the template it was taken from")
     s = sub.add_parser("vpn", help="download the WireGuard config for a VPN booking")
@@ -1656,6 +1712,9 @@ def _build_parser():
     ex.add_argument("vm", help="VM id from 'petabyte instances', or its pasted address / URL")
     ex.add_argument("--hours", type=int, required=True, help="hours to add, 1..720 (on-demand GPUs: capped per extension)")
     ex.add_argument("-y", "--yes", action="store_true", default=_S, help="skip the confirmation")
+    sp = sub.add_parser("stop", help="stop a running VM now (shows what is billed and refunded, then confirms)")
+    sp.add_argument("vm", help="VM id from 'petabyte instances', or its pasted address / URL")
+    sp.add_argument("-y", "--yes", action="store_true", default=_S, help="skip the confirmation")
 
     sn = sub.add_parser("snapshot", help="save a running VM's container as a reusable image: create | list | delete")
     sns = sn.add_subparsers(dest="snapshot_cmd", required=False)
@@ -1681,7 +1740,7 @@ COMMANDS = {"deposit": cmd_deposit, "topup": cmd_topup, "login": cmd_login, "wal
             "node": cmd_node, "ask": cmd_ask, "render": cmd_render, "transcode": cmd_transcode,
             "download": cmd_download,
             "me": cmd_me, "doctor": cmd_doctor, "instances": cmd_instances, "jobs": cmd_instances,
-            "activity": cmd_activity, "orders": cmd_orders, "extend": cmd_extend, "snapshot": cmd_snapshot,
+            "activity": cmd_activity, "orders": cmd_orders, "extend": cmd_extend, "stop": cmd_stop, "snapshot": cmd_snapshot,
             "version": cmd_version, "agent": cmd_agent, "ssh": cmd_ssh}
 
 

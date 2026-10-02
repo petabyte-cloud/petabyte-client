@@ -41,6 +41,7 @@ GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         ("run <file>", "run a notebook / .py on a rented GPU and print the result"),
         ("instances", "your running instances and recent bookings"),
         ("extend <vm> --hours N", "add hours to a running VM (shows the charge first)"),
+        ("stop <vm>", "stop a VM now (shows what is billed / refunded first)"),
         ("snapshot create|list|delete", "save a running VM as an image; relaunch: launch <template> --snapshot ID"),
         ("ssh [vm]", "set this computer up to reach your VMs, then connect"),
         ("ask \"<prompt>\"", "pay-per-token inference (OpenAI-compatible)"),

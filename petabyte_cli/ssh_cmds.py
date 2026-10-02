@@ -12,6 +12,7 @@ config inside a block it owns, and never reads, prints or uploads a private key.
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 from typing import Callable
 
@@ -282,6 +283,7 @@ def connect(ui, cfg, vm_id: str | None, *, user: str = "root", print_only: bool 
     """Hand the terminal to ssh. Resolves a missing id to the only running VM."""
     zone = S.vm_zone(cfg)
     host_override = None
+    direct = None
     vms: list[dict] = []
     if client_factory is not None:
         with client_factory(cfg) as c:
@@ -302,27 +304,27 @@ def connect(ui, cfg, vm_id: str | None, *, user: str = "root", print_only: bool 
         # do it AFTER the id is settled, or an auto-selected VM silently misses the override.
         for v in vms:
             url = v.get("url")
-            if str(v.get("vm_id")) == vm_id and isinstance(url, dict) and url.get("hostname"):
-                host_override = str(url["hostname"])
+            if str(v.get("vm_id")) == S.bare_vm_id(vm_id) and isinstance(url, dict):
+                if url.get("hostname"):
+                    host_override = str(url["hostname"])
+                direct = S.direct_target(url)
     if not vm_id:
         ui.error("Which VM? Pass its id.", run=f"petabyte ssh <vm-id>")
         return 1
     st = S.detect(cfg)
     st.zone = zone
     st.configured = S.config_matches(zone, st.chosen.priv_path if st.chosen else None)
-    argv = S.ssh_command(vm_id, zone, user=user, configured=st.configured,
-                         identity=st.chosen.priv_path if st.chosen else None)
-    if host_override:
-        argv[-1] = f"{user}@{host_override}"
+    argv = S.ssh_command(host_override or vm_id, zone, user=user, configured=st.configured,
+                         identity=st.chosen.priv_path if st.chosen else None, direct=direct)
     if print_only:
-        ui.raw(" ".join(argv))
+        ui.raw(shlex.join(argv))
         return 0
     if not st.client:
         ui.error("No SSH client found on this computer.", fix=S._install_openssh_hint())
         return 1
     if not st.configured or not st.chosen:
         ui.warn("This computer is not set up for Petabyte SSH yet — run `petabyte ssh` first.")
-    ui.note("$ " + " ".join(argv))
+    ui.note("$ " + shlex.join(argv))
     try:
         return int(subprocess.call(argv))
     except KeyboardInterrupt:
