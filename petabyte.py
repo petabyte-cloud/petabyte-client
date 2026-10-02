@@ -671,6 +671,8 @@ def cmd_launch(a, cfg):
         tp["public_ports"] = a.public_port
     if getattr(a, "public_port_profile", None):
         tp["public_port_profile"] = a.public_port_profile
+    if getattr(a, "snapshot", None):
+        tp["snapshot_id"] = a.snapshot          # the server checks it is yours, ready, and this template's
     source_path = getattr(a, "python_file", None)
     python_options = (getattr(a, "script_args", None), getattr(a, "image", None),
                       getattr(a, "timeout", None), getattr(a, "cpu_only", False),
@@ -761,7 +763,8 @@ def _launch_spot(a, cfg):
     if getattr(a, "max_price", None) is None:
         _die("--spot needs --max-price: the most $/hour you'll pay for interruptible time")
     clash = [flag for flag, on in (("--residency", getattr(a, "residency", None)),
-                                   ("--python", getattr(a, "python_file", None))) if on]
+                                   ("--python", getattr(a, "python_file", None)),
+                                   ("--snapshot", getattr(a, "snapshot", None))) if on]
     if clash:
         _die(f"--spot can't be combined with {', '.join(clash)} yet")
     if getattr(a, "within", None) or getattr(a, "gpu", None):
@@ -1274,6 +1277,77 @@ def cmd_extend(a, cfg):
     _ui.out.ok(f"Extended {vm_id} by {a.hours} h for {cost}. {d.get('hours_left', '?')} h left.")
 
 
+def cmd_snapshot(a, cfg):
+    """`petabyte snapshot create|list|delete`: save a running rental's container as an image in
+    Petabyte object storage, list yours, delete one. Relaunch: `petabyte launch <template>
+    --snapshot <id>`. A residency-locked rental (or one on an in-country gateway) shows the
+    server's warning and asks before re-sending with the acknowledgement (--yes skips the ask)."""
+    _require_product()
+    action = getattr(a, "snapshot_cmd", None) or "list"
+    with _client(cfg) as c:
+        if action == "list":
+            r = c.get("/snapshots")
+            if r.status_code != 200:
+                _die("could not list snapshots", r)
+            d = r.json()
+            if JSON:
+                print(json.dumps(d))
+                return
+            rows = d.get("snapshots") or []
+            if not rows:
+                _ui.out.info("No snapshots yet.")
+                _ui.out.command("petabyte snapshot create <VM>", caption="Save a running VM:")
+                return
+            _ui.out.table(["ID", "NAME", "TEMPLATE", "STATE", "SIZE", "CREATED"],
+                          [[x.get("id"), x.get("name"), x.get("template"),
+                            (x.get("state") or "") + (f" ({x['error']})" if x.get("error") else ""),
+                            f"{x['size_bytes'] / 1024 ** 3:.1f} GB" if x.get("size_bytes") else "-",
+                            str(x.get("created_at"))[:16]] for x in rows], title="Your snapshots")
+            _ui.out.command("petabyte launch <TEMPLATE> --snapshot <ID>", caption="Relaunch one:")
+            return
+        if action == "delete":
+            r = c.delete(f"/snapshots/{a.snapshot_id}")
+            if r.status_code != 200:
+                _die(f"could not delete snapshot {a.snapshot_id}", r)
+            if JSON:
+                print(json.dumps(r.json()))
+            else:
+                _ui.out.ok(f"Deleted snapshot {a.snapshot_id}; its stored image is removed.")
+            return
+        from petabyte_cli.ssh_setup import bare_vm_id
+        vm_id = bare_vm_id(a.vm)
+        if not vm_id:
+            _die("usage: petabyte snapshot create <vm-id>   (VM ids: petabyte instances)")
+        body = {"name": getattr(a, "name", None) or ""}
+        r = c.post(f"/vm/{vm_id}/snapshots", json=body)
+        try:
+            code = (r.json().get("error") or {}).get("code")
+        except Exception:
+            code = None
+        if r.status_code == 409 and code == "RESIDENCY_ACK_REQUIRED":
+            warning = r.json().get("detail") or ""
+            if not getattr(a, "yes", False):
+                if JSON:
+                    _die("snapshot needs your acknowledgement: " + warning + " Re-run with --yes to accept.")
+                _ui.out.warn(warning)
+                if not _ui.out.confirm("Store this snapshot outside the residency region?", default=False):
+                    _die("No snapshot taken. Confirm at the prompt, or pass --yes to accept the warning.")
+            elif not JSON:
+                _ui.out.warn(warning)
+            body["acknowledge_outside_residency"] = True
+            r = c.post(f"/vm/{vm_id}/snapshots", json=body)
+        if r.status_code != 200:
+            _die(f"could not snapshot {vm_id}" + (" (see: petabyte instances)" if r.status_code == 404 else ""), r)
+        d = r.json()
+    if JSON:
+        print(json.dumps(d))
+        return
+    snap = d.get("snapshot") or {}
+    _ui.out.ok(f"Snapshot {snap.get('id')} ({snap.get('name')}) requested; the host is saving it now. "
+               "It can be launched once its state is 'ready'.")
+    _ui.out.command("petabyte snapshot list", caption="Check progress:")
+
+
 def cmd_activity(a, cfg):
     _require_product()
     from petabyte_cli import api as _api
@@ -1479,6 +1553,8 @@ def _build_parser():
     s.add_argument("--timeout", type=int, help="Python job: seconds, 1..86400 (default 300; capped by paid time)")
     s.add_argument("--cpu-only", action="store_true", help="Python job: do not request GPU access")
     s.add_argument("--min-vram", type=int, help="Python job: minimum GPU memory in GB")
+    s.add_argument("--snapshot", metavar="ID",
+                   help="relaunch from one of your snapshots (petabyte snapshot list); use the template it was taken from")
     s = sub.add_parser("vpn", help="download the WireGuard config for a VPN booking")
     s.add_argument("booking_id", type=int); s.add_argument("-o", "--out")
     s = sub.add_parser("ask", help="send a prompt to the pay-per-token Inference API and print the answer")
@@ -1581,6 +1657,17 @@ def _build_parser():
     ex.add_argument("--hours", type=int, required=True, help="hours to add, 1..720 (on-demand GPUs: capped per extension)")
     ex.add_argument("-y", "--yes", action="store_true", default=_S, help="skip the confirmation")
 
+    sn = sub.add_parser("snapshot", help="save a running VM's container as a reusable image: create | list | delete")
+    sns = sn.add_subparsers(dest="snapshot_cmd", required=False)
+    sc = sns.add_parser("create", help="snapshot a running VM (asks first if it would leave a residency region)")
+    sc.add_argument("vm", help="VM id from 'petabyte instances', or its pasted address / URL")
+    sc.add_argument("--name", help="a label for the snapshot (default: <template>-<id>)")
+    sc.add_argument("-y", "--yes", action="store_true", default=_S,
+                    help="accept the stored-outside-the-residency-region warning without asking")
+    sns.add_parser("list", help="your snapshots and their state")
+    sd = sns.add_parser("delete", help="delete a snapshot and its stored image")
+    sd.add_argument("snapshot_id")
+
     # model hub: discover/pull/manage AI models (Hugging Face-grade UX). Owns `model`, `pull`, `auth`;
     # `run` is shared with the compute flow above and dispatched smartly below.
     if mh_cli is not None:
@@ -1594,7 +1681,7 @@ COMMANDS = {"deposit": cmd_deposit, "topup": cmd_topup, "login": cmd_login, "wal
             "node": cmd_node, "ask": cmd_ask, "render": cmd_render, "transcode": cmd_transcode,
             "download": cmd_download,
             "me": cmd_me, "doctor": cmd_doctor, "instances": cmd_instances, "jobs": cmd_instances,
-            "activity": cmd_activity, "orders": cmd_orders, "extend": cmd_extend,
+            "activity": cmd_activity, "orders": cmd_orders, "extend": cmd_extend, "snapshot": cmd_snapshot,
             "version": cmd_version, "agent": cmd_agent, "ssh": cmd_ssh}
 
 

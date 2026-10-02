@@ -41,6 +41,7 @@ GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         ("run <file>", "run a notebook / .py on a rented GPU and print the result"),
         ("instances", "your running instances and recent bookings"),
         ("extend <vm> --hours N", "add hours to a running VM (shows the charge first)"),
+        ("snapshot create|list|delete", "save a running VM as an image; relaunch: launch <template> --snapshot ID"),
         ("ssh [vm]", "set this computer up to reach your VMs, then connect"),
         ("ask \"<prompt>\"", "pay-per-token inference (OpenAI-compatible)"),
         ("render / transcode", "Blender frames / GPU video transcode"),
@@ -56,7 +57,7 @@ GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         ("--json", "machine-readable output (me, doctor, wallet, specs, agent status)"),
         ("--verbose", "full technical detail on errors"),
         ("--api <url>", "talk to another Petabyte host (default: petabyte.market)"),
-        ("-y / --yes", "assume yes for confirmations (install / stop / extend)"),
+        ("-y / --yes", "assume yes for confirmations (install / stop / extend / snapshot)"),
     ]),
 ]
 
