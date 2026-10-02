@@ -1230,7 +1230,8 @@ def cmd_instances(a, cfg):
         _ui.out.blank()
         _ui.out.table(["ID", "ROLE", "GPU", "HOURS", "AMOUNT", "STATUS", "WHEN"],
                       [[b.get("id"), b.get("role"), b.get("gpu_model"), b.get("hours"),
-                        f"${float(b.get('gross_amount') or 0):,.2f}", b.get("status"), str(b.get("created_at"))[:16]]
+                        f"${float(b.get('gross_amount') or 0):,.2f}", b.get("display_status") or b.get("status"),
+                        str(b.get("created_at"))[:16]]
                        for b in rows], title="Recent bookings")
     if not live:
         _ui.out.command("petabyte specs", caption="Rent a GPU:")
