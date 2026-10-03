@@ -1328,6 +1328,12 @@ def cmd_stop(a, cfg):
     if JSON:
         print(json.dumps(res))
         return
+    if res.get("review_window_hours") and p.get("kind") == "metered":
+        # A used rental settles after the usage-review window; say when, with the server's preview.
+        _ui.out.ok(f"Stopped {vm_id}: about {p.get('hours_billed', '?')} h held (~${float(p.get('charged') or 0):.2f}); "
+                   f"about ${float(p.get('refunded') or 0):.2f} of unused prepay comes back to your wallet after the "
+                   f"{res['review_window_hours']}-hour usage review (estimate; final figures settle then).")
+        return
     _ui.out.ok(f"{'Cancelled' if res.get('status') == 'cancelled' else 'Stopped'} {vm_id}: "
                f"charged ${float(res.get('charged') or 0):.2f}, refunded ${float(res.get('refunded') or 0):.2f}.")
 def cmd_snapshot(a, cfg):
