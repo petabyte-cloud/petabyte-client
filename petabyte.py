@@ -648,6 +648,10 @@ def cmd_launch(a, cfg):
     """Launch a ready-made template (ollama, jupyter, blender, minecraft, …) on the cheapest
     verified GPU that fits — the CLI twin of the web one-click launcher (`POST /launch`)."""
     if getattr(a, "spot", False):
+        if (getattr(a, "secret", None) or getattr(a, "storage_token", False)
+                or getattr(a, "env", None) or getattr(a, "startup_script", None)):
+            _die("--secret/--storage-token/--env/--startup-script are not available on spot rentals "
+                 "yet; launch on demand", None)
         return _launch_spot(a, cfg)
     body = {"template": a.template, "hours": a.hours}
     if getattr(a, "cached_image_only", False):
@@ -677,6 +681,18 @@ def cmd_launch(a, cfg):
         tp["port"] = a.port
     if getattr(a, "snapshot", None):
         tp["snapshot_id"] = a.snapshot          # the server checks it is yours, ready, and this template's
+    if getattr(a, "secret", None):
+        tp["secrets"] = a.secret                # NAMES only: values are sealed to the host at dispatch
+    if getattr(a, "storage_token", False):
+        tp["storage_token"] = True              # /run/secrets/PETABYTE_STORAGE_TOKEN: presign own objects
+    if getattr(a, "env", None):
+        tp["env"] = dict(a.env)                 # plain env: the host can read it (not for secrets)
+    if getattr(a, "startup_script", None):
+        try:                                    # runs inside the container after /run/secrets is written
+            with open(a.startup_script, encoding="utf-8") as f:
+                tp["startup_script"] = f.read()
+        except (OSError, UnicodeDecodeError) as e:
+            _die(f"cannot read --startup-script: {e}", None)
     source_path = getattr(a, "python_file", None)
     python_options = (getattr(a, "script_args", None), getattr(a, "image", None),
                       getattr(a, "timeout", None), getattr(a, "cpu_only", False),
@@ -1336,6 +1352,138 @@ def cmd_stop(a, cfg):
         return
     _ui.out.ok(f"{'Cancelled' if res.get('status') == 'cancelled' else 'Stopped'} {vm_id}: "
                f"charged ${float(res.get('charged') or 0):.2f}, refunded ${float(res.get('refunded') or 0):.2f}.")
+def _env_pair(text):
+    """argparse type for --env KEY=VALUE."""
+    key, sep, value = text.partition("=")
+    if not sep or not key:
+        raise argparse.ArgumentTypeError("use KEY=VALUE")
+    return key, value
+
+
+_SECRET_NAME = r"[A-Za-z_][A-Za-z0-9_]{0,63}"
+
+
+def _read_secret_value(name):
+    """The value from stdin (piped) or a no-echo prompt, never from argv (shell history, `ps`)."""
+    if sys.stdin.isatty():
+        import getpass
+        return getpass.getpass(f"Value for {name} (input hidden): ")
+    value = sys.stdin.read()
+    return value.removesuffix("\n")   # `echo x |` adds one newline
+
+
+def cmd_secret(a, cfg):
+    """`petabyte secret set|list|rm`: named secrets for your rentals. Values are write-only: the
+    server stores them encrypted and only ever releases them sealed to the host of a rental launched
+    with --secret NAME, where they appear as files in /run/secrets (in-memory, not docker env)."""
+    import re
+    action = getattr(a, "secret_cmd", None) or "list"
+    name = getattr(a, "name", None)
+    if name is not None and not re.fullmatch(_SECRET_NAME, name):
+        _die("secret names are letters, digits and _ (max 64), not starting with a digit")
+    with _client(cfg) as c:
+        if action == "set":
+            value = _read_secret_value(name)
+            if not value:
+                _die("empty value; nothing was saved")
+            r = c.put(f"/secrets/{name}", json={"value": value})
+            if r.status_code != 200:
+                _die(f"could not save secret {name}", r)
+            print(json.dumps(r.json()) if JSON else
+                  f"Saved secret {name}. Use it: petabyte launch <template> --secret {name}")
+            return
+        if action == "rm":
+            r = c.delete(f"/secrets/{name}")
+            if r.status_code != 200:
+                _die(f"could not delete secret {name}", r)
+            print(json.dumps(r.json()) if JSON else f"Deleted secret {name}.")
+            return
+        r = c.get("/secrets")
+        if r.status_code != 200:
+            _die("could not list secrets", r)
+        rows = r.json().get("secrets") or []
+        if JSON:
+            print(json.dumps(r.json()))
+        elif not rows:
+            print("No secrets yet. Add one: petabyte secret set NAME  (value from stdin or a hidden prompt)")
+        else:
+            for x in rows:
+                print(f"{x['name']:<40} updated {str(x.get('updated_at') or '')[:16]}")
+
+
+# No total cap (multi-GB transfers are fine), but a stalled connection or a socket idle this long fails.
+_TRANSFER_TIMEOUT = httpx.Timeout(connect=30, read=300, write=300, pool=30)
+
+
+def cmd_storage(a, cfg):
+    """`petabyte storage put|get|ls`: your objects (e.g. encrypted inputs) via short-lived presigned
+    URLs. No bucket credentials anywhere; --gateway sa keeps them in the in-country bucket."""
+    action = getattr(a, "storage_cmd", None) or "ls"
+    gw = getattr(a, "gateway", None)
+    if action == "put":                 # before presigning: a bad path must not burn presign quota
+        try:
+            size = os.path.getsize(a.file)
+            with open(a.file, "rb"):
+                pass
+        except OSError as e:
+            _die(f"cannot read {a.file}: {e.strerror or e}")
+    with _client(cfg) as c:
+        if action == "ls":
+            params = {"prefix": getattr(a, "prefix", None) or ""}
+            if gw:
+                params["gateway"] = gw
+            r = c.get("/storage/objects", params=params)
+            if r.status_code != 200:
+                _die("could not list objects", r)
+            if JSON:
+                print(json.dumps(r.json()))
+            else:
+                for k in r.json().get("objects") or []:
+                    print(k)
+            return
+        body = {"key": a.key, "method": "PUT" if action == "put" else "GET"}
+        if gw:
+            body["gateway"] = gw
+        r = c.post("/storage/presign", json=body)
+        if r.status_code != 200:
+            _die(f"could not authorize {action} of {a.key}", r)
+        url = r.json()["url"]
+    if action == "put":
+        def chunks():
+            with open(a.file, "rb") as f:
+                while True:
+                    block = f.read(1024 * 1024)
+                    if not block:
+                        return
+                    yield block
+        # An explicit Content-Length keeps httpx from chunking (S3 presigned PUT refuses chunked).
+        resp = httpx.put(url, content=chunks(), headers={"Content-Length": str(size)}, timeout=_TRANSFER_TIMEOUT)
+        if resp.status_code not in (200, 201, 204):
+            _die(f"upload of {a.key} was refused by storage (HTTP {resp.status_code})")
+        print(json.dumps({"key": a.key, "bytes": size}) if JSON else f"Uploaded {a.file} -> {a.key} ({size} bytes)")
+        return
+    import contextlib
+    import tempfile
+    tmp = None
+    try:
+        with httpx.stream("GET", url, timeout=_TRANSFER_TIMEOUT) as resp:
+            if resp.status_code != 200:
+                _die(f"download of {a.key} failed (HTTP {resp.status_code})")
+            # A unique temp file next to the target: only THIS download's partial file is cleaned up.
+            fd, tmp = tempfile.mkstemp(prefix=os.path.basename(a.file) + ".", suffix=".part",
+                                       dir=os.path.dirname(a.file) or ".")
+            with os.fdopen(fd, "wb") as out:
+                for block in resp.iter_bytes():
+                    out.write(block)
+        os.replace(tmp, a.file)
+    except BaseException:
+        if tmp is not None:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
+        raise
+    print(json.dumps({"key": a.key, "file": a.file}) if JSON else f"Downloaded {a.key} -> {a.file}")
+
+
 def cmd_snapshot(a, cfg):
     """`petabyte snapshot create|list|delete`: save a running rental's container as an image in
     Petabyte object storage, list yours, delete one. Relaunch: `petabyte launch <template>
@@ -1617,6 +1765,17 @@ def _build_parser():
     s.add_argument("--min-vram", type=int, help="custom / Python job: minimum GPU memory in GB")
     s.add_argument("--snapshot", metavar="ID",
                    help="relaunch from one of your snapshots (petabyte snapshot list); use the template it was taken from")
+    s.add_argument("--secret", action="append", metavar="NAME",
+                   help="attach a saved secret (petabyte secret set NAME); appears as /run/secrets/NAME "
+                        "in the container, never as env. Repeat for more (max 20)")
+    s.add_argument("--storage-token", action="store_true", dest="storage_token",
+                   help="also deliver /run/secrets/PETABYTE_STORAGE_TOKEN: presigns your own objects "
+                        "while this rental runs (petabyte storage put/get)")
+    s.add_argument("--env", action="append", type=_env_pair, metavar="KEY=VALUE",
+                   help="plain environment variable (the host can read it; use --secret for credentials). Repeatable")
+    s.add_argument("--startup-script", metavar="FILE",
+                   help="bash script run inside the container once it is up (after /run/secrets is written); "
+                        "output in startup.log in the workspace")
     s = sub.add_parser("vpn", help="download the WireGuard config for a VPN booking")
     s.add_argument("booking_id", type=int); s.add_argument("-o", "--out")
     s = sub.add_parser("ask", help="send a prompt to the pay-per-token Inference API and print the answer")
@@ -1733,6 +1892,26 @@ def _build_parser():
     sd = sns.add_parser("delete", help="delete a snapshot and its stored image")
     sd.add_argument("snapshot_id")
 
+    se = sub.add_parser("secret", help="secrets for your rentals: set | list | rm (values are write-only)")
+    ses = se.add_subparsers(dest="secret_cmd", required=False)
+    ss = ses.add_parser("set", help="create/replace a secret; the value is read from stdin or a hidden prompt")
+    ss.add_argument("name")
+    ses.add_parser("list", help="your secret names (values are never shown)")
+    sr = ses.add_parser("rm", help="delete a secret")
+    sr.add_argument("name")
+
+    so = sub.add_parser("storage", help="your objects via short-lived presigned URLs: put | get | ls")
+    sos = so.add_subparsers(dest="storage_cmd", required=False)
+    sop = sos.add_parser("put", help="upload a file to <key> under your own prefix")
+    sop.add_argument("file"); sop.add_argument("key")
+    sog = sos.add_parser("get", help="download <key> to a file")
+    sog.add_argument("key"); sog.add_argument("file")
+    sol = sos.add_parser("ls", help="list your object keys")
+    sol.add_argument("prefix", nargs="?", default="")
+    for _sp in (sop, sog, sol):
+        _sp.add_argument("--gateway", choices=["us", "sa"],
+                         help="sa = the in-country (Riyadh) bucket, for rentals on the sa gateway")
+
     # model hub: discover/pull/manage AI models (Hugging Face-grade UX). Owns `model`, `pull`, `auth`;
     # `run` is shared with the compute flow above and dispatched smartly below.
     if mh_cli is not None:
@@ -1747,6 +1926,7 @@ COMMANDS = {"deposit": cmd_deposit, "topup": cmd_topup, "login": cmd_login, "wal
             "download": cmd_download,
             "me": cmd_me, "doctor": cmd_doctor, "instances": cmd_instances, "jobs": cmd_instances,
             "activity": cmd_activity, "orders": cmd_orders, "extend": cmd_extend, "stop": cmd_stop, "snapshot": cmd_snapshot,
+            "secret": cmd_secret, "storage": cmd_storage,
             "version": cmd_version, "agent": cmd_agent, "ssh": cmd_ssh}
 
 
