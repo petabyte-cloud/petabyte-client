@@ -1442,6 +1442,8 @@ def cmd_storage(a, cfg):
                     print(k)
             return
         body = {"key": a.key, "method": "PUT" if action == "put" else "GET"}
+        if action == "put":
+            body["size"] = size          # the URL is signed for exactly this Content-Length
         if gw:
             body["gateway"] = gw
         r = c.post("/storage/presign", json=body)
