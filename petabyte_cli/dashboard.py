@@ -240,7 +240,7 @@ def expected_return_rows(d: apimod.Dashboard) -> list[tuple[str, Any]] | str | N
         f = fc.data or {}
         rows: list[tuple[str, Any]] = []
         if f.get("net_per_hour") is not None:
-            rows.append(("Listed rate", f"{money(f.get('net_per_hour'))}/hr net  (your price minus the platform fee)"))
+            rows.append(("Listed rate", f"{money(f.get('net_per_hour'))}/hr net  (Petabyte's rate minus the platform fee)"))
         ests = f.get("estimates") or []
         head = f.get("headline") or {}
         lo = head.get("low_daily_usd")
@@ -250,7 +250,7 @@ def expected_return_rows(d: apimod.Dashboard) -> list[tuple[str, Any]] | str | N
         months = [e.get("monthly_usd") for e in ests if e.get("monthly_usd") is not None]
         if months:
             rows.append(("Estimated / month", f"{money(min(months))} – {money(max(months))}"))
-        rows.append(("Basis", ("dim", f.get("note") or "Estimate from your listed price at typical utilization — actual earnings depend on demand.")))
+        rows.append(("Basis", ("dim", f.get("note") or "Estimate from Petabyte's rate for your GPU at typical utilization — actual earnings depend on demand.")))
         return rows
     if d.spend.ok:
         sp = d.spend.data or {}

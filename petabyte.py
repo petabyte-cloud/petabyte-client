@@ -1013,7 +1013,8 @@ def _node_status(a, cfg):
     on = _green("online") if node["online"] else _amber("offline")
     att = _green("attested") if node["attested"] else _amber("unverified")
     print(_bold(f"Node {sid}") + f"  {node.get('gpu_model') or 'CPU'}  [{on} · {att}]")
-    sug = _dim(f"  (suggested ${format(node['suggested_price'], '.2f')})") if node.get("suggested_price") else ""
+    you = node.get("you_receive")   # Petabyte sets one price per GPU model; the host gets it minus the fee
+    sug = _dim(f"  (Petabyte rate · you receive ${format(float(you), '.3f')}/hr)") if you else _dim("  (set by Petabyte)")
     print(f"  price:        ${format(node['price_per_hour'], '.2f')}/hr" + sug)
     print(f"  units:        {node['units_busy']}/{node['units_total']} busy  ({node['utilization_pct']}% util)")
     succ = f"  ({node['success_rate']}% success)" if node.get("success_rate") is not None else ""
@@ -1698,7 +1699,7 @@ def _build_parser():
                    help="--run-agent: don't follow the log after starting")
     p.add_argument("--foreground", action="store_true", help="--run-agent: run attached (no service manager)")
     p.add_argument("--sell", choices=["gpu", "cpu", "all"], help="--install-agent: what to sell (skips the question)")
-    p.add_argument("--price", type=float, help="--install-agent: price per hour in USD (default: automatic)")
+    p.add_argument("--price", type=float, help="--install-agent: CPU-only price per hour in USD (GPU prices are set by Petabyte)")
     p.add_argument("--no-egress-lockdown", dest="no_egress_lockdown", action="store_true",
                    help="--install-agent: don't restrict container egress")
     p.add_argument("--dry-run", dest="dry_run", action="store_true", help="--install-agent: show the plan only")

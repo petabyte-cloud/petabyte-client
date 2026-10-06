@@ -247,20 +247,25 @@ def cmd_install(ui, cfg, client_factory, *, login: Callable[[], None] | None = N
     if sell == "gpu" and not gpus:
         ui.warn("No GPU was detected; listing CPU only.")
         sell = "cpu"
-    if price is None and ui.interactive and not yes:
-        raw = ui.ask("Price per hour in USD (leave empty for automatic pricing)", default="")
+    if sell != "cpu":
+        if price is not None:
+            ui.warn("--price is ignored for GPUs: Petabyte sets one price per GPU model.")
+        price = None
+    elif price is None and ui.interactive and not yes:
+        raw = ui.ask("CPU-only price per hour in USD (leave empty for the default)", default="")
         if raw:
             try:
                 price = float(raw)
                 if not (price > 0) or price == float("inf"):   # rejects -5, inf and nan
                     raise ValueError(raw)
             except ValueError:
-                ui.warn("Not a positive number — using automatic pricing.")
+                ui.warn("Not a positive number — using the default.")
                 price = None
     plan = A.InstallPlan(api_url=api_url, sell=sell, price_per_hour=price, lockdown_egress=not no_egress_lockdown,
                          installer_name="install.ps1" if sysinfo.is_windows() else "install.sh")
     ui.kv([("Sell", {"gpu": "GPU", "cpu": "CPU only", "all": "all available resources"}[sell]),
-           ("Price", f"{money(price)}/hr" if price is not None else "automatic (market-suggested)"),
+           ("Price", f"{money(price)}/hr" if price is not None
+            else "set by Petabyte (one price per GPU model)" if sell != "cpu" else "default"),
            ("Egress lockdown", "on" if plan.lockdown_egress else "off"),
            ("API", api_url)], title="Configuration")
     ui.ok("Configuration valid")
