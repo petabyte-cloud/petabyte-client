@@ -913,9 +913,14 @@ def cmd_ask(a, cfg):
              "in with --key-stdin, set PETABYTE_API_KEY, or save it as 'api_key' in your config")
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
     with httpx.Client(base_url=cfg["api_url"], headers=headers, timeout=120) as c:
-        body = {"messages": [{"role": "user", "content": a.prompt}]}
+        system = getattr(a, "system", None)
+        body = {"messages": ([{"role": "system", "content": system}] if system else [])
+                + [{"role": "user", "content": a.prompt}]}
         if getattr(a, "model", None):
             body["model"] = a.model
+        for field in ("tier", "temperature", "max_tokens", "top_p", "stop"):
+            if getattr(a, field, None) is not None:
+                body[field] = getattr(a, field)
         try:
             r = c.post("/v1/chat/completions", json=body)
         except httpx.RequestError as e:
@@ -1611,8 +1616,6 @@ def cmd_agent(a, cfg):
                            foreground=bool(getattr(a, "foreground", False)))
     if what in ("stop", "kill"):
         return _ac.cmd_kill(_ui.out, cfg, yes=yes, force=bool(getattr(a, "force", False)))
-    if what == "mining":
-        return _ac.cmd_mining(getattr(a, "mining_action", "status"))
     if what == "logs":
         return _ac.cmd_logs(_ui.out, cfg, lines=int(getattr(a, "lines", 30) or 30))
     return _ac.cmd_status(_ui.out, cfg, _client, json_mode=JSON)
@@ -1783,6 +1786,13 @@ def _build_parser():
     s = sub.add_parser("ask", help="send a prompt to the pay-per-token Inference API and print the answer")
     s.add_argument("prompt", help="the prompt to send")
     s.add_argument("--model", help="model id (default: the server's default)")
+    s.add_argument("--system", help="system prompt: how the model should behave")
+    s.add_argument("--tier", choices=("economy", "standard", "fast"),
+                   help="speed tier on community GPUs (economy is cheapest; default standard)")
+    s.add_argument("--temperature", type=float, help="randomness, 0 (deterministic) to 2")
+    s.add_argument("--max-tokens", type=int, dest="max_tokens", help="cap on the answer length, in tokens")
+    s.add_argument("--top-p", type=float, dest="top_p", help="nucleus sampling, 0 to 1")
+    s.add_argument("--stop", action="append", help="stop sequence (repeat for up to 4)")
     s.add_argument("--key", help="inference API key — lands in shell history and `ps`, so prefer "
                                  "--key-stdin / $PETABYTE_API_KEY / saved config; use only with "
                                  "short-lived keys (e.g. CI)")
@@ -1854,8 +1864,6 @@ def _build_parser():
     ak.add_argument("-y", "--yes", action="store_true", default=_S)
     ak.add_argument("--force", action="store_true", default=_S)
     ags.add_parser("status", help="what the agent is doing right now")
-    am = ags.add_parser("mining", help="optional idle mining: status | enable | disable")
-    am.add_argument("mining_action", nargs="?", default="status", choices=("status", "enable", "disable"))
     al = ags.add_parser("logs", help="follow the agent log")
     al.add_argument("-n", "--lines", type=int, default=30)
 
