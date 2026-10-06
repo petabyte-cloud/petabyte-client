@@ -1349,11 +1349,13 @@ def cmd_stop(a, cfg):
     if JSON:
         print(json.dumps(res))
         return
-    if res.get("review_window_hours") and p.get("kind") == "metered":
-        # A used rental settles after the usage-review window; say when, with the server's preview.
-        _ui.out.ok(f"Stopped {vm_id}: about {p.get('hours_billed', '?')} h held (~${float(p.get('charged') or 0):.2f}); "
-                   f"about ${float(p.get('refunded') or 0):.2f} of unused prepay comes back to your wallet after the "
-                   f"{res['review_window_hours']}-hour usage review (estimate; final figures settle then).")
+    if res.get("review_required") and p.get("kind") == "metered":
+        # Gateway-observed use is only a time estimate. The buyer must review before seller payment.
+        _ui.out.ok(f"Stopped {vm_id}: estimated bill ${float(p.get('charged') or 0):.2f} for about "
+                   f"{p.get('hours_billed', '?')} h; estimated unused prepay "
+                   f"${float(p.get('refunded') or 0):.2f} remains held pending review. "
+                   "Open rental review to accept, request support, or get a refund if eligible. "
+                   "Seller payment is not automatic.")
         return
     _ui.out.ok(f"{'Cancelled' if res.get('status') == 'cancelled' else 'Stopped'} {vm_id}: "
                f"charged ${float(res.get('charged') or 0):.2f}, refunded ${float(res.get('refunded') or 0):.2f}.")
