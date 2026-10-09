@@ -1147,10 +1147,15 @@ def cmd_render(a, cfg):
     fs, fe = _parse_frames(a.frames)
     with _client(cfg) as c:
         ref = _upload_input(c, a.file)
-        r = c.post("/render", json={"blend_ref": ref, "frame_start": fs, "frame_end": fe,
-                                    "samples": a.samples, "nodes": a.nodes, "hours": a.hours,
-                                    "gpu_class": a.gpu_class, "engine": a.engine,
-                                    "blender_version": a.blender_version})
+        body = {"blend_ref": ref, "frame_start": fs, "frame_end": fe,
+                "samples": a.samples, "nodes": a.nodes, "hours": a.hours,
+                "gpu_class": a.gpu_class, "engine": a.engine,
+                "blender_version": a.blender_version}
+        if getattr(a, "video", False):
+            body["video"] = {"fps": a.fps, "codec": a.video_codec, "crf": a.crf, "preset": a.preset,
+                             "pix_fmt": a.pix_fmt, "container": a.container,
+                             **({"width": a.video_width} if a.video_width else {})}
+        r = c.post("/render", json=body)
         if r.status_code >= 300:
             _die("render request failed", r)
         d = r.json()
@@ -1819,9 +1824,18 @@ def _build_parser():
     s.add_argument("--nodes", type=int, default=1, help="split the frame range across N nodes")
     s.add_argument("--hours", type=int, default=1, help="hours to escrow under the booking terms")
     s.add_argument("--gpu-class", help="GPU model filter, e.g. NVIDIA GeForce RTX 5070 Ti Laptop GPU")
-    s.add_argument("--engine", choices=("auto", "CYCLES", "BLENDER_RENDER"), default="auto")
+    s.add_argument("--engine", choices=("auto", "CYCLES", "BLENDER_RENDER", "EEVEE"), default="auto")
     s.add_argument("--blender-version", choices=("latest", "2.79"), default="latest")
     s.add_argument("--out", default="./renders", help="download frames here")
+    s.add_argument("--video", action="store_true", help="also encode the frames into a video (ffmpeg on the node)")
+    s.add_argument("--fps", type=int, default=24, help="video frame rate (with --video)")
+    s.add_argument("--video-codec", choices=("h264", "h265"), default="h264")
+    s.add_argument("--crf", type=int, default=18, help="video quality 0-51: lower = better and bigger")
+    s.add_argument("--preset", default="medium", choices=("ultrafast", "superfast", "veryfast", "faster", "fast",
+                                                           "medium", "slow", "slower", "veryslow"))
+    s.add_argument("--pix-fmt", choices=("yuv420p", "yuv422p", "yuv444p"), default="yuv420p")
+    s.add_argument("--video-width", type=int, help="scale the video to this width (aspect ratio kept)")
+    s.add_argument("--container", choices=("mp4", "mov", "mkv"), default="mp4")
 
     s = sub.add_parser("download", help="wait for and download an existing job; no new booking")
     s.add_argument("job_id", type=int, help="owned render or transcode job ID")
