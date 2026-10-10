@@ -311,14 +311,47 @@ def cmd_wallet(a, cfg):
 
 
 def cmd_specs(a, cfg):
+    prov, region = getattr(a, "provider", None), getattr(a, "region", None)
+    specs, cloud = None, None
     with _client(cfg) as c:
-        r = c.get("/specs")
-    if r.status_code != 200:
-        _die("specs failed", r)
-    specs = r.json()["specs"]
+        if prov in (None, "any", "community"):
+            r = c.get("/specs", params={"region": region} if region else None)
+            if r.status_code != 200:
+                _die("specs failed", r)
+            specs = r.json()["specs"]
+        if prov not in (None, "community"):     # any / do / aws / alibaba: on-demand cloud GPUs
+            r = c.get("/marketplace/catalogue", params={k: v for k, v in (("provider", prov), ("region", region)) if v})
+            if r.status_code != 200:
+                _die("on-demand catalogue failed", r)
+            cloud = [row for row in r.json().get("catalogue", []) if row.get("provisionable")]
     if JSON:
-        print(json.dumps({"specs": specs}))
+        print(json.dumps({k: v for k, v in (("specs", specs), ("on_demand", cloud)) if v is not None}))
         return
+    if specs is not None:
+        _print_specs(specs)
+    if cloud is not None:
+        _print_on_demand(cloud, prov)
+
+
+def _print_on_demand(rows, prov):
+    if not rows:
+        print("no on-demand cloud GPU matches right now")
+        return
+    print(_bold("On-demand cloud GPUs (start in a few minutes, billed by the hour):"))
+    for row in sorted(rows, key=lambda r: r["price_per_hour"]):
+        print(f"  {str(row['gpu_model']):<28} {str(row.get('vram_gb', '?')) + ' GB':>7}  "
+              f"{_amber('$' + format(row['price_per_hour'], '.4g') + '/hr'):>10}  "
+              f"{row['provider']:<14} {row['region']:<16} {row.get('country', '')}")
+    best = min(rows, key=lambda r: r["price_per_hour"])
+    flag = {v: k for k, v in PROVIDERS.items()}.get(best["provider"], prov)
+    print(f"Launch on one: petabyte launch jupyter --provider {flag} --region {best['region']}")
+
+
+# `--provider` ids -> the catalogue's provider names (standby_catalogue.PROVIDER_IDS on the server).
+PROVIDERS = {"do": "DigitalOcean", "aws": "AWS", "alibaba": "Alibaba Cloud"}
+
+
+def _print_specs(specs):
     if not specs:
         if _ui is not None:
             _ui.out.info("no bookable GPUs available right now — try again in a few minutes")
@@ -532,14 +565,12 @@ def cmd_run(a, cfg):
         print("timed out waiting for result", file=sys.stderr)
 
 
-def _pick_gpu(c):
+def _pick_gpu(c, region=None):
     """Interactive GPU chooser for `launch`. Returns a live spec_id to pin, or None to let the
-    server auto-pick the cheapest fit. Live GPUs are numbered + bookable; standby (DigitalOcean
-    capacity provisioned on demand) is shown below, honestly labeled STANDBY — it is informational
-    only (never in the escrow path) and not bookable from the CLI until on-demand provisioning is
-    turned on server-side."""
+    server auto-pick the cheapest fit. Live GPUs are numbered + bookable; on-demand cloud GPUs are
+    listed below them, and `launch --provider do|aws|alibaba` books one."""
     try:
-        r = c.get("/specs")
+        r = c.get("/specs", params={"region": region} if region else None)
         specs = r.json().get("specs", []) if r.status_code == 200 else []
     except Exception:
         specs = []
@@ -552,8 +583,8 @@ def _pick_gpu(c):
         pass
     if not specs:
         if standby:
-            print(_dim(f"  no live GPUs to rent right now — {len(standby)} standby (on-demand) GPU "
-                       f"type(s) exist, but on-demand booking isn't enabled yet."))
+            print(_dim(f"  no seller GPU matches right now; {len(standby)} on-demand cloud GPU "
+                       f"type(s) are listed by `petabyte specs --provider any`."))
         return None                          # nothing to pin; let /launch report capacity
     print(_bold("Choose a GPU to run on:"))
     for i, sp in enumerate(specs, 1):
@@ -565,17 +596,17 @@ def _pick_gpu(c):
               f"{sp['available_units']} unit(s)  ID {sp['spec_id']}  {sp.get('provider', '')}  {loc}"
               + ("  " + " ".join(tags) if tags else ""))
     if standby:
-        print(_amber("  standby (on-demand DigitalOcean capacity, ~90s to provision "
-                     "— informational, not bookable from the CLI yet):"))
+        print(_amber("  on-demand cloud GPUs (a few minutes to start; book with "
+                     "--provider do|aws|alibaba):"))
         seen = set()
         for s in standby:
-            key = (s.get("gpu_model"), s.get("country"))
+            key = (s.get("gpu_model"), s.get("country"), s.get("provider"))
             if key in seen:
                 continue
             seen.add(key)
             print(_dim(f"     · {str(s.get('gpu_model')):<24} "
-                       f"${s['price_per_hour']:.2f}/hr  {s.get('country', '')} {s.get('flag', '')}  ")
-                  + _amber("STANDBY"))
+                       f"${s['price_per_hour']:.2f}/hr  {s.get('provider', '')}  "
+                       f"{s.get('country', '')} {s.get('flag', '')}  ") + _amber("ON DEMAND"))
     try:
         raw = input(f"  pick [1-{len(specs)}, Enter = cheapest]: ").strip()
     except EOFError:
@@ -662,6 +693,8 @@ def cmd_launch(a, cfg):
         body["max_price_per_hour"] = a.max_price
     if getattr(a, "region", None):
         body["region"] = a.region
+    if getattr(a, "provider", None):
+        body["provider"] = a.provider
     if getattr(a, "spec", None):
         body["spec_id"] = str(a.spec)
     if getattr(a, "gateway", None) and a.gateway != "auto":
@@ -734,9 +767,9 @@ def cmd_launch(a, cfg):
     with _client(cfg) as c:
         # If the buyer didn't pin a spec and we're on an interactive terminal, let them choose the
         # GPU instead of silently auto-picking. Piped/--json/-y stays non-interactive (auto-pick).
-        if (not body.get("spec_id") and not JSON
+        if (not body.get("spec_id") and not JSON and body.get("provider") in (None, "any", "community")
                 and sys.stdin.isatty() and sys.stdout.isatty()):
-            chosen = _pick_gpu(c)
+            chosen = _pick_gpu(c, body.get("region"))
             if chosen is not None:
                 body["spec_id"] = str(chosen)
         if "gateway" not in body:                # auto: let the server pick the fastest for YOU
@@ -744,6 +777,9 @@ def cmd_launch(a, cfg):
             if rtt:
                 body["gateway_rtt_ms"] = rtt
         r = c.post("/launch", json=body)
+        offer = _standby_offer(r)
+        if offer:
+            return _book_on_demand(c, a, offer)
         if r.status_code != 200:
             _die("launch failed", r)
         d = r.json()
@@ -775,6 +811,47 @@ def cmd_launch(a, cfg):
             print("  " + _dim(d["connect"]))
 
 
+def _standby_offer(r):
+    """The on-demand cloud GPU /launch offers when no seller GPU matched (409 NO_LIVE_NODE_STANDBY)."""
+    if r.status_code != 409:
+        return None
+    try:
+        err = r.json().get("error") or {}
+    except ValueError:
+        return None
+    return err.get("standby") if err.get("code") == "NO_LIVE_NODE_STANDBY" else None
+
+
+def _book_on_demand(c, a, offer):
+    """Show the offered cloud GPU and its price, confirm (or --yes), then book it through
+    POST /marketplace/standby/book, the same order the web launcher places."""
+    import uuid
+    hours, price = int(offer.get("hours") or 1), float(offer["price_per_hour"])
+    what = (f"{offer['gpu_model']} ({offer.get('vram_gb', '?')} GB) on {offer.get('provider', 'the cloud')} "
+            f"in {offer.get('country') or ''} {offer['region']}: ${price:.4g}/hr x {hours} h = ${price * hours:.2f}")
+    if not getattr(a, "yes", False):
+        if JSON or not sys.stdin.isatty():
+            _die(f"No seller GPU matched. On demand: {what}. Re-run with --yes to book it. Nothing was charged.")
+        try:
+            answer = input(f"No seller GPU matched. Start {what}? [y/N] ").strip().lower()
+        except EOFError:
+            answer = ""
+        if answer not in ("y", "yes"):
+            _die("Not booked. Nothing was charged.")
+    r = c.post("/marketplace/standby/book", headers={"Idempotency-Key": uuid.uuid4().hex}, json={
+        "do_size": offer["do_size"], "region": offer["region"], "hours": hours,
+        "template": offer.get("template") or a.template, "template_params": offer.get("template_params") or {},
+        "quoted_price_per_hour": offer["price_per_hour"]})
+    if r.status_code != 200:
+        _die("on-demand booking failed", r)
+    d = r.json()
+    if JSON:
+        print(json.dumps(d))
+        return
+    print(_green("✓ ") + d.get("message", "Provisioning your GPU."))
+    print(f"  request #{d.get('provision_id')}   it appears in `petabyte instances` once it is up")
+
+
 def _duration(text):
     """'90m' / '12h' / '3d' -> timedelta (argparse type for --within)."""
     import datetime as _dt
@@ -794,6 +871,7 @@ def _launch_spot(a, cfg):
     if getattr(a, "max_price", None) is None:
         _die("--spot needs --max-price: the most $/hour you'll pay for interruptible time")
     clash = [flag for flag, on in (("--residency", getattr(a, "residency", None)),
+                                   ("--provider", getattr(a, "provider", None) in ("do", "aws", "alibaba")),
                                    ("--python", getattr(a, "python_file", None)),
                                    ("--snapshot", getattr(a, "snapshot", None))) if on]
     if clash:
@@ -1717,7 +1795,10 @@ def _build_parser():
     s = sub.add_parser("deposit");  s.add_argument("amount", type=_finite_float)
     tp = sub.add_parser("topup");  tp.add_argument("amount", type=_finite_float)
     sub.add_parser("wallet")
-    sub.add_parser("specs")
+    s = sub.add_parser("specs", help="GPUs you can rent: seller GPUs, or on-demand cloud GPUs with --provider")
+    s.add_argument("--provider", choices=["any", "community", "do", "aws", "alibaba"],
+                   help="community = seller GPUs (default); do / aws / alibaba = that cloud's on-demand GPUs; any = both")
+    s.add_argument("--region", help="country code (SA, US) or cloud region (tor1, me-central-1)")
     sub.add_parser("gateways", help="list connection gateways and your latency to each")
     s = sub.add_parser("run", help="run a notebook/.py on a rented GPU, OR start a model runtime")
     s.add_argument("--deps", dest="deps", action="store_true", default=None,
@@ -1741,7 +1822,12 @@ def _build_parser():
                        help="launch a ready-made template (ollama, jupyter, blender, minecraft…) on the cheapest verified GPU")
     s.add_argument("template", help="template name, e.g. ollama, jupyter, blender, minecraft, swarm")
     s.add_argument("--hours", type=int, default=2)
-    s.add_argument("--region")
+    s.add_argument("--region", help="country code (SA, US) or cloud region (tor1, us-east-1, me-central-1)")
+    s.add_argument("--provider", choices=["any", "community", "do", "aws", "alibaba"],
+                   help="any (default): a seller GPU, else the cheapest on-demand cloud GPU; community: seller "
+                        "GPUs only; do (DigitalOcean) / aws / alibaba: an on-demand GPU from that cloud")
+    s.add_argument("-y", "--yes", action="store_true", default=argparse.SUPPRESS,
+                   help="book the offered on-demand cloud GPU without asking")
     s.add_argument("--max-price", type=_finite_float, dest="max_price", help="cap the $/hour you'll pay")
     s.add_argument("--spot", action="store_true",
                    help="interruptible: cheapest idle host at/below --max-price, billed per second, may stop any time")

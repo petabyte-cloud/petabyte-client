@@ -69,6 +69,21 @@ petabyte launch fedora-kde --spec 246 --hours 1 --max-price 0.13
 
 From client version 0.4.9, `launch --spec` also accepts the marketplace's public host ID.
 
+From 0.6.0, choose the provider and region:
+
+```bash
+petabyte specs --provider aws --region US                   # on-demand AWS GPUs in the US
+petabyte launch jupyter --provider community --region SA    # seller GPUs in Saudi Arabia only
+petabyte launch jupyter --provider alibaba --region me-central-1 --hours 2 --yes
+```
+
+* `--provider`:
+  * `any` (default): a seller GPU, else the cheapest on-demand cloud GPU.
+  * `community`: seller GPUs only.
+  * `do` (DigitalOcean), `aws` or `alibaba`: an on-demand GPU from that cloud.
+* `--region`: a country code (`SA`, `US`) or a cloud region (`tor1`, `us-east-1`, `me-central-1`).
+* An on-demand GPU shows its price and asks before booking; `--yes` books it without asking.
+
 From 0.5.0, spot (interruptible, billed per second) rentals:
 
 ```bash
