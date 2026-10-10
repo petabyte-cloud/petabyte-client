@@ -62,6 +62,7 @@ TOOL_POLICIES: dict[str, ToolPolicy] = {
         _public("list_templates", "GET /templates"),
         _public("estimate_cost", "POST /estimate"),
         _public("list_gateways", "GET /gateways"),
+        _public("list_cloud_gpus", "GET /marketplace/catalogue"),
         # -- compute reads --
         _read("list_instances", "compute:read", "GET /vm"),
         _read(
@@ -77,7 +78,7 @@ TOOL_POLICIES: dict[str, ToolPolicy] = {
             "create_instance",
             ("compute:write",),
             "write",
-            ("POST /launch", "POST /estimate", "GET /gateways"),
+            ("POST /launch", "POST /estimate", "GET /gateways", "POST /marketplace/standby/book"),
             moves_money=True,
             confirm=True,
         ),

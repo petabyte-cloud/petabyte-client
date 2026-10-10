@@ -35,8 +35,8 @@ Petabyte is a GPU compute marketplace. Use these tools as a thin interface over 
 Petabyte account, authenticated with THEIR API key; the API enforces ownership, scopes and
 rate limits on every call.
 
-Workflow: discover with list_offers / get_offer / list_templates / estimate_cost (public, no
-key needed) -> act with create_instance (compute:write) -> monitor with list_instances /
+Workflow: discover with list_offers / get_offer / list_templates / estimate_cost /
+list_cloud_gpus (public, no key needed) -> act with create_instance (compute:write) -> monitor with list_instances /
 get_instance / get_usage / get_balance -> extend_instance, stop_instance, restart_instance or
 delete_instance (compute:write).
 

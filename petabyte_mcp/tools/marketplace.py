@@ -15,6 +15,7 @@ from ..validation import (
     OfferId,
     Offset,
     Price,
+    Provider,
     ShortText,
     SortKey,
     TemplateName,
@@ -23,6 +24,19 @@ from ..validation import (
 
 _READ = ToolAnnotations(
     readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True
+)
+
+
+_CLOUD_GPU_FIELDS = (
+    "gpu_model",
+    "vram_gb",
+    "gpu_count",
+    "provider",
+    "region",
+    "country",
+    "country_iso",
+    "price_per_hour",
+    "spot",
 )
 
 
@@ -90,6 +104,26 @@ def register(server: MCPServer, rt: Runtime) -> None:
         raw = await rt.get("/templates", auth=False)
         templates = shape_templates(raw)
         return {"templates": templates, "count": len(templates)}
+
+    @server.tool(name="list_cloud_gpus", title="List on-demand cloud GPUs", annotations=_READ)
+    async def list_cloud_gpus(
+        provider: Provider | None = None, region: ShortText | None = None
+    ) -> dict[str, Any]:
+        """On-demand cloud GPUs Petabyte can start in a few minutes (DigitalOcean, AWS, Alibaba
+        Cloud), each at the cloud's own hourly price. `provider` is do / aws / alibaba (any or
+        omitted: every cloud); `region` is a cloud region (tor1, us-east-1, me-central-1) or a
+        country code (SA, US). Only GPUs that can start right now are listed. Book one with
+        create_instance(provider=..., region=...). Requires no API key or scope."""
+        await rt.authz.authorize("list_cloud_gpus")
+        params = {"provider": provider, "region": region}
+        raw = await rt.get("/marketplace/catalogue", params=params, auth=False)
+        gpus = [
+            {k: row.get(k) for k in _CLOUD_GPU_FIELDS}
+            for row in (raw or {}).get("catalogue", [])
+            if row.get("provisionable")
+        ]
+        gpus.sort(key=lambda g: g.get("price_per_hour") or 0)
+        return {"gpus": gpus, "count": len(gpus)}
 
     @server.tool(name="list_gateways", title="List connection gateways", annotations=_READ)
     async def list_gateways() -> dict[str, Any]:

@@ -103,6 +103,7 @@ class PetabyteAPIError(Exception):
         request_id: str | None = None,
         retry_after_s: int | None = None,
         next_hint: str | None = None,
+        details: Mapping[str, Any] | None = None,
     ) -> None:
         self.status = status
         self.code = code
@@ -110,6 +111,7 @@ class PetabyteAPIError(Exception):
         self.request_id = request_id
         self.retry_after_s = retry_after_s
         self.next_hint = next_hint
+        self.details = dict(details or {})
         super().__init__(f"{status} {code}: {message}")
 
 
@@ -148,6 +150,7 @@ def parse_error_response(status: int, headers: Mapping[str, str], body: str) -> 
     message = f"HTTP {status}"
     request_id = None
     next_hint = None
+    details: dict[str, Any] = {}
     retry_after: int | None = None
     ra = headers.get("retry-after") or headers.get("Retry-After")
     if ra and str(ra).strip().isdigit():
@@ -164,6 +167,8 @@ def parse_error_response(status: int, headers: Mapping[str, str], body: str) -> 
             message = str(err.get("message") or message)
             request_id = err.get("request_id") or None
             next_hint = err.get("next") or None
+            if isinstance(err.get("standby"), dict):
+                details["standby"] = err["standby"]  # the on-demand GPU /launch offers
             if err.get("retry_after_seconds") is not None:
                 try:
                     retry_after = int(err["retry_after_seconds"])
@@ -181,7 +186,13 @@ def parse_error_response(status: int, headers: Mapping[str, str], body: str) -> 
     elif body:
         message = body.strip()[:200]
     return PetabyteAPIError(
-        status, code, message, request_id=request_id, retry_after_s=retry_after, next_hint=next_hint
+        status,
+        code,
+        message,
+        request_id=request_id,
+        retry_after_s=retry_after,
+        next_hint=next_hint,
+        details=details,
     )
 
 
@@ -224,4 +235,5 @@ def to_tool_failure(err: PetabyteAPIError) -> ToolFailure:
         request_id=err.request_id,
         retry_after_s=err.retry_after_s,
         next_hint=err.next_hint,
+        details=err.details,
     )

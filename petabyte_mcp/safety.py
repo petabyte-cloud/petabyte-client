@@ -30,6 +30,13 @@ HOW_TO_CONFIRM_CREATE = (
 )
 
 
+HOW_TO_ACCEPT_ON_DEMAND = (
+    "No seller GPU matched, so Petabyte offers the on-demand cloud GPU above. Nothing was booked "
+    "or charged. To start it, call create_instance again with the same arguments plus "
+    "confirm=true, accept_on_demand=true and the same idempotency_key."
+)
+
+
 def preview(action: str, *, how: str = HOW_TO_CONFIRM, **facts: Any) -> dict[str, Any]:
     """A side-effect-free description of what a confirmed call would do."""
     out: dict[str, Any] = {"requires_confirmation": True, "action": action}

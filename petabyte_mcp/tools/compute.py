@@ -14,7 +14,7 @@ from mcp.types import ToolAnnotations
 
 from ..errors import Codes, ToolFailure, fail
 from ..runtime import Runtime
-from ..safety import HOW_TO_CONFIRM_CREATE, preview, require_echo
+from ..safety import HOW_TO_ACCEPT_ON_DEMAND, HOW_TO_CONFIRM_CREATE, preview, require_echo
 from ..shaping import shape_estimate, shape_events, shape_instance, shape_instances, shape_launch
 from ..validation import (
     ACTIVE_STATUSES,
@@ -30,6 +30,7 @@ from ..validation import (
     InstanceStatus,
     OfferId,
     Price,
+    Provider,
     ShortText,
     TemplateName,
     enforce_hours_cap,
@@ -85,6 +86,9 @@ async def _fetch_instance(rt: Runtime, instance_id: str) -> dict[str, Any]:
         )
 
 
+_CLOUDS = ("do", "aws", "alibaba")
+
+
 def register(server: MCPServer, rt: Runtime) -> None:
     write_enabled = not rt.settings.read_only
 
@@ -127,12 +131,22 @@ def register(server: MCPServer, rt: Runtime) -> None:
         compute_mode: ComputeMode | None = None,
         gateway: GatewayChoice | None = None,
         residency: CountryCode | None = None,
+        provider: Provider | None = None,
+        accept_on_demand: bool = False,
         confirm: Confirm = False,
         idempotency_key: IdempotencyKey | None = None,
     ) -> dict[str, Any]:
         """Launch a GPU instance from a template (see list_templates) on the cheapest verified
         host that fits, or on a specific host via `offer_id` (from list_offers). Prepays
         `hours` x rate into escrow from the wallet; unused hours are refunded on stop.
+
+        `provider`: "any" (default: a seller GPU, else an on-demand cloud GPU), "community"
+        (seller GPUs only), or "do" (DigitalOcean) / "aws" / "alibaba" (that cloud's on-demand
+        GPU; see list_cloud_gpus). `region` is a country code (SA, US) or a cloud region
+        (tor1, us-east-1, me-central-1). When no seller GPU matches, the confirmed call returns
+        the on-demand offer with its price instead of booking; show it to the user, and only
+        after they agree call again with accept_on_demand=true to start it (billed for `hours`,
+        up to 24, at that cloud's rate).
 
         `gateway` picks the connection gateway (see list_gateways): "auto" (default) measures
         latency from this machine and uses the fastest; "us" or "sa" (Riyadh) pins one.
@@ -163,6 +177,8 @@ def register(server: MCPServer, rt: Runtime) -> None:
             intent["gateway"] = gateway
         if residency:
             intent["residency"] = residency
+        if provider:
+            intent["provider"] = provider
         if not confirm:
             facts: dict[str, Any] = {k: v for k, v in intent.items() if k != "template_params"}
             if offer_id:
@@ -172,12 +188,18 @@ def register(server: MCPServer, rt: Runtime) -> None:
                 est_body["template_params"] = params
             if offer_id:
                 est_body["spec_id"] = offer_id
-            try:
-                facts["estimate"] = shape_estimate(
-                    await rt.post("/estimate", json=est_body, auth=False)
+            if provider in _CLOUDS:
+                facts["estimate_unavailable"] = (
+                    "an on-demand cloud GPU is priced by the cloud: confirm=true returns its exact "
+                    "price before anything is booked"
                 )
-            except ToolFailure as exc:
-                facts["estimate_unavailable"] = exc.message
+            else:
+                try:
+                    facts["estimate"] = shape_estimate(
+                        await rt.post("/estimate", json=est_body, auth=False)
+                    )
+                except ToolFailure as exc:
+                    facts["estimate_unavailable"] = exc.message
             facts["suggested_idempotency_key"] = idempotency_key or _new_key("mcp-launch")
             return preview("create_instance", how=HOW_TO_CONFIRM_CREATE, **facts)
         key = idempotency_key or _new_key("mcp-launch")
@@ -187,11 +209,63 @@ def register(server: MCPServer, rt: Runtime) -> None:
             rtt = _gws.rtt_map(await _gws.probe(rt))
             if rtt:
                 intent["gateway_rtt_ms"] = rtt
-        raw = await rt.post("/launch", json=intent, idempotency_key=key, long=True)
+        try:
+            raw = await rt.post("/launch", json=intent, idempotency_key=key, long=True)
+        except ToolFailure as exc:
+            offer = exc.details.get("standby") if exc.code == "NO_LIVE_NODE_STANDBY" else None
+            if not isinstance(offer, dict):
+                raise
+            return await _on_demand(offer, exc.message, key, price, accept_on_demand)
         out = shape_launch(raw)
         out["idempotency_key"] = key
         out["escrowed"] = True
         return out
+
+    async def _on_demand(
+        offer: dict[str, Any], why: str, key: str, cap: float | None, accept: bool
+    ) -> dict[str, Any]:
+        """/launch found no seller GPU and offered an on-demand cloud GPU: show it, or (after
+        the user agreed: accept_on_demand=true) book exactly it."""
+        hours = int(offer.get("hours") or 1)
+        rate = float(offer["price_per_hour"])
+        shown = {k: offer.get(k) for k in ("gpu_model", "vram_gb", "provider", "region", "country")}
+        shown.update(price_per_hour=rate, hours=hours, total=round(rate * hours, 2))
+        if cap is not None and rate > cap:
+            fail(
+                Codes.LIMIT_EXCEEDED,
+                f"no seller GPU matched, and the on-demand {shown['gpu_model']} costs "
+                f"${rate}/hour, above the ${cap}/hour limit. Nothing was booked or charged.",
+                details={"on_demand_offer": shown},
+            )
+        if not accept:
+            return preview(
+                "create_instance",
+                how=HOW_TO_ACCEPT_ON_DEMAND,
+                reason=why,
+                on_demand_offer=shown,
+                suggested_idempotency_key=key,
+            )
+        booked = await rt.post(
+            "/marketplace/standby/book",
+            json={
+                "do_size": offer["do_size"],
+                "region": offer["region"],
+                "hours": hours,
+                "template": offer.get("template"),
+                "template_params": offer.get("template_params") or {},
+                "quoted_price_per_hour": rate,
+            },
+            idempotency_key=key,
+        )
+        return {
+            "status": "provisioning",
+            "provision_id": (booked or {}).get("provision_id"),
+            "on_demand": shown,
+            "message": (booked or {}).get("message"),
+            "next": "it appears in list_instances once it is up (usually a few minutes)",
+            "idempotency_key": key,
+            "escrowed": True,
+        }
 
     # ------------------------------------------------------------------ extend
     @server.tool(name="extend_instance", title="Extend instance", annotations=_MONEY)

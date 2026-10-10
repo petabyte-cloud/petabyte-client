@@ -48,6 +48,8 @@ Confirm = StrictBool  # a JSON boolean only — "yes", 1, "true" are rejected
 SortKey = Literal["price", "vram", "rep"]
 ComputeMode = Literal["STANDARD", "VERIFIED", "CONFIDENTIAL"]
 GatewayChoice = Literal["auto", "us", "sa"]
+# Where the GPU comes from: seller GPUs ("community"), a cloud's on-demand GPU, or either ("any").
+Provider = Literal["any", "community", "do", "aws", "alibaba"]
 CountryCode = Annotated[
     str, StringConstraints(strip_whitespace=True, to_upper=True, pattern=r"^[A-Za-z]{2}$")
 ]
