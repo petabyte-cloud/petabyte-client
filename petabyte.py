@@ -339,7 +339,8 @@ def _print_on_demand(rows, prov):
         return
     print(_bold("On-demand cloud GPUs (start in a few minutes, billed by the hour):"))
     for row in sorted(rows, key=lambda r: r["price_per_hour"]):
-        print(f"  {str(row['gpu_model']):<28} {str(row.get('vram_gb', '?')) + ' GB':>7}  "
+        gpu = str(row["gpu_model"]) + (" (spot)" if row.get("spot") else "")   # interruptible, cheaper
+        print(f"  {gpu:<28} {str(row.get('vram_gb', '?')) + ' GB':>7}  "
               f"{_amber('$' + format(row['price_per_hour'], '.4g') + '/hr'):>10}  "
               f"{row['provider']:<14} {row['region']:<16} {row.get('country', '')}")
     best = min(rows, key=lambda r: r["price_per_hour"])
