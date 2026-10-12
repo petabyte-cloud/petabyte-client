@@ -312,9 +312,14 @@ def cmd_wallet(a, cfg):
 
 def cmd_specs(a, cfg):
     prov, region = getattr(a, "provider", None), getattr(a, "region", None)
+    spot = getattr(a, "spot", False)
+    if spot and prov == "community":
+        _die("specs --spot lists the clouds' spot GPUs; interruptible seller GPUs are rented with "
+             "`petabyte launch <template> --spot --max-price <$/hour>`")
+    prov = (prov or "any") if spot else prov    # spot GPUs come from the clouds
     specs, cloud = None, None
     with _client(cfg) as c:
-        if prov in (None, "any", "community"):
+        if prov in (None, "any", "community") and not spot:
             r = c.get("/specs", params={"region": region} if region else None)
             if r.status_code != 200:
                 _die("specs failed", r)
@@ -323,7 +328,8 @@ def cmd_specs(a, cfg):
             r = c.get("/marketplace/catalogue", params={k: v for k, v in (("provider", prov), ("region", region)) if v})
             if r.status_code != 200:
                 _die("on-demand catalogue failed", r)
-            cloud = [row for row in r.json().get("catalogue", []) if row.get("provisionable")]
+            cloud = [row for row in r.json().get("catalogue", [])
+                     if row.get("provisionable") and (not spot or row.get("spot"))]
     if JSON:
         print(json.dumps({k: v for k, v in (("specs", specs), ("on_demand", cloud)) if v is not None}))
         return
@@ -679,7 +685,8 @@ def cmd_gateways(a, cfg):
 def cmd_launch(a, cfg):
     """Launch a ready-made template (ollama, jupyter, blender, minecraft, …) on the cheapest
     verified GPU that fits — the CLI twin of the web one-click launcher (`POST /launch`)."""
-    if getattr(a, "spot", False):
+    cloud_spot = getattr(a, "spot", False) and getattr(a, "provider", None) in ("do", "aws", "alibaba")
+    if getattr(a, "spot", False) and not cloud_spot:     # interruptible seller GPUs (POST /spot/launch)
         if (getattr(a, "secret", None) or getattr(a, "storage_token", False)
                 or getattr(a, "env", None) or getattr(a, "startup_script", None)):
             _die("--secret/--storage-token/--env/--startup-script are not available on spot rentals "
@@ -696,6 +703,8 @@ def cmd_launch(a, cfg):
         body["region"] = a.region
     if getattr(a, "provider", None):
         body["provider"] = a.provider
+    if cloud_spot:
+        body["spot"] = True                   # that cloud's spot GPU, offered and booked like on-demand
     if getattr(a, "spec", None):
         body["spec_id"] = str(a.spec)
     if getattr(a, "gateway", None) and a.gateway != "auto":
@@ -872,7 +881,6 @@ def _launch_spot(a, cfg):
     if getattr(a, "max_price", None) is None:
         _die("--spot needs --max-price: the most $/hour you'll pay for interruptible time")
     clash = [flag for flag, on in (("--residency", getattr(a, "residency", None)),
-                                   ("--provider", getattr(a, "provider", None) in ("do", "aws", "alibaba")),
                                    ("--python", getattr(a, "python_file", None)),
                                    ("--snapshot", getattr(a, "snapshot", None))) if on]
     if clash:
@@ -1800,6 +1808,8 @@ def _build_parser():
     s.add_argument("--provider", choices=["any", "community", "do", "aws", "alibaba"],
                    help="community = seller GPUs (default); do / aws / alibaba = that cloud's on-demand GPUs; any = both")
     s.add_argument("--region", help="country code (SA, US) or cloud region (tor1, me-central-1)")
+    s.add_argument("--spot", action="store_true",
+                   help="only the clouds' spot GPUs: cheaper, but the cloud can reclaim them")
     sub.add_parser("gateways", help="list connection gateways and your latency to each")
     s = sub.add_parser("run", help="run a notebook/.py on a rented GPU, OR start a model runtime")
     s.add_argument("--deps", dest="deps", action="store_true", default=None,
@@ -1831,7 +1841,9 @@ def _build_parser():
                    help="book the offered on-demand cloud GPU without asking")
     s.add_argument("--max-price", type=_finite_float, dest="max_price", help="cap the $/hour you'll pay")
     s.add_argument("--spot", action="store_true",
-                   help="interruptible: cheapest idle host at/below --max-price, billed per second, may stop any time")
+                   help="interruptible. With --provider do/aws/alibaba: that cloud's cheaper spot GPU (the cloud can "
+                        "reclaim it; you pay only the time it ran). Otherwise: the cheapest idle seller host "
+                        "at/below --max-price, billed per second, may stop any time")
     s.add_argument("--gpu", metavar="ID",
                    help="with --spot: wait for this GPU model (e.g. a100-80gb, rtx-2060) instead of failing when none is idle")
     s.add_argument("--within", type=_duration, metavar="DURATION",
