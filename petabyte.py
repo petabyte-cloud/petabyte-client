@@ -1452,6 +1452,121 @@ def cmd_stop(a, cfg):
         return
     _ui.out.ok(f"{'Cancelled' if res.get('status') == 'cancelled' else 'Stopped'} {vm_id}: "
                f"charged ${float(res.get('charged') or 0):.2f}, refunded ${float(res.get('refunded') or 0):.2f}.")
+
+
+_DEPLOY_DONE = ("TERMINATED", "RECOVERY_REQUIRED")
+
+
+def cmd_deploy(a, cfg):
+    """`petabyte deploy [file]`: deploy a GPU workload described by a template exported from the
+    /deploy builder, a petabyte.yaml manifest, a Dockerfile or a Terraform petabyte_deployment block. Petabyte picks the most cost-effective compatible GPU, shows the plan and
+    the hard budget, then (after you confirm, or --yes) runs it and streams logs until it ends.
+    `petabyte deploy --stop <id>` stops one. Same API as the web builder (/deployments)."""
+    _require_product()
+    with _client(cfg) as c:
+        if getattr(a, "stop", None):
+            r = c.post(f"/deployments/{a.stop}/stop")
+            if r.status_code != 200:
+                _die(f"could not stop deployment {a.stop}", r)
+            d = r.json()
+            print(json.dumps(d)) if JSON else _ui.out.ok(f"{a.stop}: {d['state']} (recorded spend ${d['charged_usd']:.2f})")
+            return
+        path = a.file or next((p for p in ("petabyte.json", "petabyte.yaml", "petabyte.yml", "petabyte.tf", "Dockerfile")
+                               if os.path.exists(p)), "petabyte.json")
+        try:
+            with open(path, encoding="utf-8") as f:
+                text = f.read(200_001)
+        except (OSError, ValueError) as e:
+            _die(f"cannot read {path}: {e}. Design one at /deploy and click Export, or write petabyte.yaml.", None)
+        # JSON, YAML, Dockerfile and Terraform (petabyte_deployment, read only) all become the builder's graph.
+        r = c.post("/deployments/import", json={"text": text, "filename": os.path.basename(path)})
+        if r.status_code == 404:
+            _die("GPU deployments are not enabled on this server", r)
+        if r.status_code != 200:
+            _die(f"cannot read {path}", r)
+        tpl = r.json()
+        graph = tpl["graph"]
+        if getattr(a, "budget", None) is not None:
+            for n in graph.get("nodes") or []:
+                if n.get("type") == "budget_limiter":
+                    n.setdefault("config", {})["max_total"] = a.budget
+        r = c.post("/deployments", json={"name": a.name or tpl.get("name") or "cli deployment", "graph": graph})
+        if r.status_code == 404:
+            _die("GPU deployments are not enabled on this server", r)
+        if r.status_code != 200:
+            _die("could not create the deployment", r)
+        dep_id = r.json()["id"]
+        r = c.post(f"/deployments/{dep_id}/plan")
+        if r.status_code == 422:
+            errs = (r.json().get("error") or {}).get("reason") or {}
+            _die("the diagram has errors:\n" + "\n".join(f"  {k}: {'; '.join(v)}" for k, v in errs.items()), None)
+        if r.status_code != 200:
+            _die("could not plan the deployment", r)
+        plan = r.json().get("plan") or {}
+        sel = plan.get("selected")
+        if not sel:
+            _die("no compatible GPU: " + plan.get("explanation", "")
+                 + ("".join(f"\n  try: {s}" for s in plan.get("suggestions") or [])), None)
+        if not JSON:
+            print(plan.get("plan_text", ""))
+            print(f"\nWhy: {plan.get('explanation')}\nBudget: {plan.get('budget_guarantee')}")
+        if not getattr(a, "yes", False) and (JSON or not _ui.out.confirm(
+                f"Deploy on {sel['gpu_model']} ({sel['provider']})? ${plan.get('escrow_hold_usd', 0):.2f} is held "
+                "from your wallet; unused time is refunded.", default=False)):
+            _die(f"Not deployed (plan kept as {dep_id}). Confirm at the prompt, or pass --yes"
+                 + (" (required with --json)." if JSON else "."))
+        r = c.post(f"/deployments/{dep_id}/deploy")
+        if r.status_code != 200:
+            _die("deploy failed", r)
+        d = r.json()
+        if getattr(a, "no_wait", False):
+            print(json.dumps(d)) if JSON else _ui.out.ok(f"Deploying {dep_id}: {d['state']}. "
+                                                         f"Stop it any time: petabyte deploy --stop {dep_id}")
+            return
+        after, state, misses = 0, None, 0
+        try:
+            while True:
+                # A blip (5xx, 429, timeout, non-JSON) must not crash the CLI while the paid run continues:
+                # keep the last good view, retry, and give up only after ~a minute of consecutive failures.
+                try:
+                    r = c.get(f"/deployments/{dep_id}")
+                    if r.status_code in (401, 403, 404):
+                        _die(f"lost access to deployment {dep_id}; it may still be running (see /deploy)", r)
+                    r.raise_for_status()
+                    d = r.json()
+                    lr = c.get(f"/deployments/{dep_id}/logs", params={"after": after})
+                    lines = lr.json().get("lines", []) if lr.status_code == 200 else []
+                    misses = 0
+                except (httpx.HTTPError, ValueError) as e:
+                    misses += 1
+                    if misses >= 20:
+                        _die(f"cannot reach Petabyte ({type(e).__name__}); {dep_id} keeps running. "
+                             f"Check /deploy or stop it with: petabyte deploy --stop {dep_id}", None)
+                    if not JSON and misses == 1:
+                        _ui.out.ok(f"connection problem ({type(e).__name__}); retrying…")
+                    time.sleep(3)
+                    continue
+                for line in lines:
+                    after = line["id"]
+                    if not JSON:
+                        print(line["line"])
+                if d["state"] != state and not JSON:
+                    _ui.out.ok(f"{dep_id}: {d['state']}")
+                state = d["state"]
+                if state in _DEPLOY_DONE or (state == "CLEANING_UP" and d.get("review_url")):
+                    break
+                time.sleep(3)
+        except KeyboardInterrupt:
+            (_ui.err if JSON else _ui.out).ok(f"Detached; {dep_id} keeps running. Stop it with: petabyte deploy --stop {dep_id}")
+            return
+    if JSON:
+        print(json.dumps(d))
+    elif d.get("review_url"):
+        _ui.out.ok(f"Container stopped. Review the run to release payment: {cfg['api_url'].rstrip('/')}{d['review_url']}")
+    else:
+        _ui.out.ok(f"{dep_id} {d['state']}: recorded spend ${d['charged_usd']:.2f}")
+
+
 def _env_pair(text):
     """argparse type for --env KEY=VALUE."""
     key, sep, value = text.partition("=")
@@ -2007,6 +2122,16 @@ def _build_parser():
     sp.add_argument("vm", help="VM id from 'petabyte instances', or its pasted address / URL")
     sp.add_argument("-y", "--yes", action="store_true", default=_S, help="skip the confirmation")
 
+    dp = sub.add_parser("deploy", help="deploy a GPU workload (petabyte.json/.yaml, Dockerfile or .tf): "
+                                       "cheapest compatible GPU, hard budget, live logs")
+    dp.add_argument("file", nargs="?", help="petabyte.json/.yaml, a Dockerfile, or a .tf with a petabyte_deployment "
+                                            "resource (default: the first of those found here)")
+    dp.add_argument("--budget", type=_finite_float, metavar="USD", help="max total spend (overrides the file's budget)")
+    dp.add_argument("--name", help="deployment name (default: the template's)")
+    dp.add_argument("--stop", metavar="ID", help="stop deployment ID instead of deploying")
+    dp.add_argument("--no-wait", action="store_true", help="start it and return instead of streaming logs")
+    dp.add_argument("-y", "--yes", action="store_true", default=_S, help="skip the confirmation")
+
     sn = sub.add_parser("snapshot", help="save a running VM's container as a reusable image: create | list | delete")
     sns = sn.add_subparsers(dest="snapshot_cmd", required=False)
     sc = sns.add_parser("create", help="snapshot a running VM (asks first if it would leave a residency region)")
@@ -2051,7 +2176,7 @@ COMMANDS = {"deposit": cmd_deposit, "topup": cmd_topup, "login": cmd_login, "wal
             "node": cmd_node, "ask": cmd_ask, "render": cmd_render, "transcode": cmd_transcode,
             "download": cmd_download,
             "me": cmd_me, "doctor": cmd_doctor, "instances": cmd_instances, "jobs": cmd_instances,
-            "activity": cmd_activity, "orders": cmd_orders, "extend": cmd_extend, "stop": cmd_stop, "snapshot": cmd_snapshot,
+            "activity": cmd_activity, "orders": cmd_orders, "extend": cmd_extend, "stop": cmd_stop, "deploy": cmd_deploy, "snapshot": cmd_snapshot,
             "secret": cmd_secret, "storage": cmd_storage,
             "version": cmd_version, "agent": cmd_agent, "ssh": cmd_ssh}
 
