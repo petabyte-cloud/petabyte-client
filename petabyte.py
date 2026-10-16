@@ -1461,11 +1461,11 @@ def cmd_deploy(a, cfg):
     """`petabyte deploy [file]`: deploy a GPU workload described by a template exported from the
     /deploy builder, a petabyte.yaml manifest, a Dockerfile or a Terraform petabyte_deployment block. Petabyte picks the most cost-effective compatible GPU, shows the plan and
     the hard budget, then (after you confirm, or --yes) runs it and streams logs until it ends.
-    `petabyte deploy --stop <id>` stops one. Same API as the web builder (/deployments)."""
+    `petabyte deploy --stop <id>` stops one. Same API as the web builder (/gpu-deployments)."""
     _require_product()
     with _client(cfg) as c:
         if getattr(a, "stop", None):
-            r = c.post(f"/deployments/{a.stop}/stop")
+            r = c.post(f"/gpu-deployments/{a.stop}/stop")
             if r.status_code != 200:
                 _die(f"could not stop deployment {a.stop}", r)
             d = r.json()
@@ -1479,7 +1479,7 @@ def cmd_deploy(a, cfg):
         except (OSError, ValueError) as e:
             _die(f"cannot read {path}: {e}. Design one at /deploy and click Export, or write petabyte.yaml.", None)
         # JSON, YAML, Dockerfile and Terraform (petabyte_deployment, read only) all become the builder's graph.
-        r = c.post("/deployments/import", json={"text": text, "filename": os.path.basename(path)})
+        r = c.post("/gpu-deployments/import", json={"text": text, "filename": os.path.basename(path)})
         if r.status_code == 404:
             _die("GPU deployments are not enabled on this server", r)
         if r.status_code != 200:
@@ -1490,13 +1490,13 @@ def cmd_deploy(a, cfg):
             for n in graph.get("nodes") or []:
                 if n.get("type") == "budget_limiter":
                     n.setdefault("config", {})["max_total"] = a.budget
-        r = c.post("/deployments", json={"name": a.name or tpl.get("name") or "cli deployment", "graph": graph})
+        r = c.post("/gpu-deployments", json={"name": a.name or tpl.get("name") or "cli deployment", "graph": graph})
         if r.status_code == 404:
             _die("GPU deployments are not enabled on this server", r)
         if r.status_code != 200:
             _die("could not create the deployment", r)
         dep_id = r.json()["id"]
-        r = c.post(f"/deployments/{dep_id}/plan")
+        r = c.post(f"/gpu-deployments/{dep_id}/plan")
         if r.status_code == 422:
             errs = (r.json().get("error") or {}).get("reason") or {}
             _die("the diagram has errors:\n" + "\n".join(f"  {k}: {'; '.join(v)}" for k, v in errs.items()), None)
@@ -1515,7 +1515,7 @@ def cmd_deploy(a, cfg):
                 "from your wallet; unused time is refunded.", default=False)):
             _die(f"Not deployed (plan kept as {dep_id}). Confirm at the prompt, or pass --yes"
                  + (" (required with --json)." if JSON else "."))
-        r = c.post(f"/deployments/{dep_id}/deploy")
+        r = c.post(f"/gpu-deployments/{dep_id}/deploy")
         if r.status_code != 200:
             _die("deploy failed", r)
         d = r.json()
@@ -1529,12 +1529,12 @@ def cmd_deploy(a, cfg):
                 # A blip (5xx, 429, timeout, non-JSON) must not crash the CLI while the paid run continues:
                 # keep the last good view, retry, and give up only after ~a minute of consecutive failures.
                 try:
-                    r = c.get(f"/deployments/{dep_id}")
+                    r = c.get(f"/gpu-deployments/{dep_id}")
                     if r.status_code in (401, 403, 404):
                         _die(f"lost access to deployment {dep_id}; it may still be running (see /deploy)", r)
                     r.raise_for_status()
                     d = r.json()
-                    lr = c.get(f"/deployments/{dep_id}/logs", params={"after": after})
+                    lr = c.get(f"/gpu-deployments/{dep_id}/logs", params={"after": after})
                     lines = lr.json().get("lines", []) if lr.status_code == 200 else []
                     misses = 0
                 except (httpx.HTTPError, ValueError) as e:
