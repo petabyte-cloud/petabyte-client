@@ -1906,7 +1906,7 @@ def _build_parser():
                    help="--run-agent: don't follow the log after starting")
     p.add_argument("--foreground", action="store_true", help="--run-agent: run attached (no service manager)")
     p.add_argument("--sell", choices=["gpu", "cpu", "all"], help="--install-agent: what to sell (skips the question)")
-    p.add_argument("--price", type=float, help="--install-agent: CPU-only price per hour in USD (GPU prices are set by Petabyte)")
+    p.add_argument("--price", type=float, help="ignored: Petabyte sets every price (per GPU model, or per CPU thread)")
     p.add_argument("--no-egress-lockdown", dest="no_egress_lockdown", action="store_true",
                    help="--install-agent: don't restrict container egress")
     p.add_argument("--dry-run", dest="dry_run", action="store_true", help="--install-agent: show the plan only")
